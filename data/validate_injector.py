@@ -9,13 +9,14 @@ import os
 from contextlib import redirect_stdout
 
 import numpy as np
-import pandas as pd
 
 from data.clients import client_pool, group_profiles
+from data.design import load_dataset
 from data.inject import inject, load_or_build_roles, panel_probs_for_rate
 
 SEEDS = [11, 23, 37, 53, 71, 89, 101, 113, 131, 149]
 SWEEP = [0.0, 0.25, 0.5, 0.75, 1.0]
+MAX_MASKABLE_CORR = 0.9    # precondition: panels must not be near-collinear copies
 
 
 def phi(M):
@@ -72,13 +73,26 @@ def summarise(label, runs):
     hist = np.mean([r["panels_hist"] for r in runs], 0)
     extreme = hist[0] + hist[-1]
     flag = "UNREALISTIC" if extreme > 0.9 else "ok"
-    return (f"{label:26s} {f('rate_maskable'):6.3f} {f('rate_all'):6.3f} "
+    return flag, (f"{label:26s} {f('rate_maskable'):6.3f} {f('rate_all'):6.3f} "
             f"{f('within'):7.3f} {f('cross'):7.3f} {f('lift_mean'):6.2f} {f('lift_max'):6.2f}"
             f"   [{' '.join(f'{h:.2f}' for h in hist)}] {flag}")
 
 
+def precondition(roles, flags):
+    """A dataset is usable only if its maskable features are not near-collinear
+    and no mechanism produces an all-or-nothing (unrealistic) panel pattern."""
+    med = roles["panel_corr_median"]
+    bad = [label for label, f in flags.items() if f == "UNREALISTIC"]
+    reasons = []
+    if med > MAX_MASKABLE_CORR:
+        reasons.append(f"median |corr| among maskable {med:.3f} > {MAX_MASKABLE_CORR}")
+    if bad:
+        reasons.append(f"UNREALISTIC under {bad}")
+    return not reasons, reasons
+
+
 def validate(name, raw_dir, rate, jitter):
-    df = pd.read_csv(os.path.join(raw_dir, f"{name}.csv"))
+    df, _ = load_dataset(name, raw_dir)
     roles = load_or_build_roles(name, df)
     pool = client_pool(len(df))
     X = df[roles["features"]].to_numpy(float)[pool]
@@ -102,11 +116,12 @@ def validate(name, raw_dir, rate, jitter):
     configs += [(f"mar o={o}", {"driver_overlap": o}) for o in SWEEP]
     configs += [("fd_mnar top", {"direction": "top"}), ("fd_mnar bottom", {"direction": "bottom"})]
     configs += [(f"cd_mnar s={s}", {"class_spread": s}) for s in SWEEP]
-    res = {}
+    res, flags = {}, {}
     for label, kw in configs:
         mech = label.split()[0]
         res[label] = run_config(X, y, roles, rate, jitter, mech, **kw)
-        print(summarise(label, res[label]))
+        flags[label], line = summarise(label, res[label])
+        print(line)
 
     print("\nper-feature missing rate (mean over seeds):")
     for label in ["mcar", "mar o=0.5", "fd_mnar top", "cd_mnar s=0.5"]:
@@ -134,13 +149,17 @@ def validate(name, raw_dir, rate, jitter):
     spread = max(base.values()) - min(base.values())
     verdicts.append("RATE calibration: " + " ".join(f"{k}={v:.3f}" for k, v in base.items())
                     + f"  spread={spread:.3f} -> {'PASS' if spread <= 0.02 else 'FAIL'}")
+    ok, reasons = precondition(roles, flags)
+    verdicts.append(f"PRECONDITION (median maskable |corr| {roles['panel_corr_median']:.3f} <= "
+                    f"{MAX_MASKABLE_CORR}, no UNREALISTIC mechanism): "
+                    + ("ACCEPT" if ok else "REJECT - " + "; ".join(reasons)))
     print("\n" + "\n".join(verdicts))
-    return roles
+    return roles, ok
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--datasets", nargs="+", default=["concrete", "housing", "wine", "naval"])
+    ap.add_argument("--datasets", nargs="+", default=["concrete", "housing", "wine", "energy"])
     ap.add_argument("--raw", default="./raw")
     ap.add_argument("--rate", type=float, default=0.3)
     ap.add_argument("--jitter", type=float, default=0.05)

@@ -10,7 +10,7 @@ import os
 import numpy as np
 import yaml
 
-from data.design import DESIGN_FRAC, DESIGN_SEED, decile_edges, design_split
+from data.design import DESIGN_SEED, decile_edges, design_split
 
 MAR_SLOPE = 2.0        # b in sigmoid(a + b*z)
 CD_SLOPE = 2.0         # logit shift per unit class_spread at the extreme outcome bin
@@ -79,7 +79,6 @@ def build_roles(df):
         "panel_corr_median": round(med, 4),
         "bin_edges": {feats[i]: [float(e) for e in decile_edges(X[:, i])] for i in always},
         "design_seed": DESIGN_SEED,
-        "design_frac": DESIGN_FRAC,
         "n_design_rows": int(len(design)),
     }
 

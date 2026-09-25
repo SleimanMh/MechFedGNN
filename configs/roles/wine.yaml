@@ -117,5 +117,4 @@ bin_edges:
   - 12.2
   - 14.0
 design_seed: 0
-design_frac: 0.1
 n_design_rows: 160

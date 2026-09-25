@@ -22,7 +22,7 @@ Mask convention everywhere: **`M = 1` observed, `M = 0` missing**; absence
 
 | Item | Decision |
 |---|---|
-| Data | GRAPE-9 UCI suite, fetched by a script you write (§2). Start with **concrete, housing, wine, naval**. Complete data + injected missingness. |
+| Data | GRAPE-9 UCI suite, fetched by a script you write (§2). Start with **concrete, housing, wine, energy** (naval rejected by the §3.5 precondition). Complete data + injected missingness. |
 | Task | Regression (MSE). AUC-ROC additionally reported by binarising the target at the **training-fold median** and ranking the regression predictions. No second model. |
 | Backbone | Mask-aware MLP: input `concat([x_zero_filled, M])`, hidden (64, 32), ReLU, 1 output. |
 | Loss | **`L = L_pred` only.** No reconstruction term, no reconstruction head. |
@@ -51,7 +51,10 @@ feature/target split matches the GRAPE paper.
 - **Assert zero NaNs** in every downloaded file and print `n`, `d` per dataset.
   Controlled injection is only meaningful on complete data — if a file has
   native NaNs, fail loudly.
-- CLI: `--out ./raw`, `--datasets concrete housing wine naval`
+- CLI: `--out ./raw`, `--datasets concrete housing wine energy`
+- At load time (`data/design.py: load_dataset`), **exact-duplicate feature
+  columns are dropped** (first kept), logged, and the reduced `d` reported.
+  A duplicate would otherwise be a panel member with φ ≡ its twin.
 
 ## 3. `data/inject.py` — panel-based missingness
 
@@ -64,15 +67,18 @@ meant to detect.
 
 ### 3.0 Design split (`data/design.py`)
 
-A fixed 10% of rows (seed 0) is **excluded from every client** and used only
+A fixed set of `max(10% of n, 150)` rows, capped at 30% of n (seed 0), is
+**excluded from every client** and used only
 for column roles (§3.1), panel assignment (§3.2) and histogram bin edges
 (§4.3). Frozen design choices therefore never see a row any client trains,
-tunes or tests on. Tested: no design row ever appears in a client.
+tunes or tests on. Tested: no design row ever appears in a client. Under
+150 design rows (only when the 30% cap binds) a warning is raised: roles,
+panels and bin edges from so few rows are noisy.
 
 ### 3.1 Column roles (computed once per dataset, frozen in config)
 
 - Compute `|corr(f, target)|` on the design-split rows.
-- Features constant on the design rows (e.g. naval f8, f11) are listed as
+- Features constant on the design rows are listed as
   `constant`: never masked, never a characteristic or driver.
 - `maskable` = the `floor(d/2)` non-constant features with the **lowest** absolute
   correlation. Masking the least predictive half keeps the task learnable so
@@ -129,11 +135,26 @@ supposed to isolate mechanism.
 - `p_k[P]` — per-client, per-panel ordering probability. This is what makes
   clients differ. Set by the client profile (§4).
 - `jitter` — within-panel independent loss, default 0.05.
-- `driver_overlap ∈ [0,1]` (MAR only) — the fraction of panels that share one
-  driver score `z_r`. At 0 each panel has its own independent driver, so panels
-  are skipped independently; at 1 all panels are skipped on the same rows, so
-  co-missingness spans panels as well as within them. **This is the
-  dose-response knob.**
+- `driver_overlap = o ∈ [0,1]` (MAR only) — the correlation between panel
+  drivers. The always-observed features are whitened and `n_panels + 1`
+  orthonormal directions drawn: `u_0` shared, `u_P` panel P's own. Panel P's
+  driver is
+
+  ```
+  z_P = sqrt(o) · z_shared + sqrt(1 − o) · z_own(P)
+  ```
+
+  so any two panel drivers correlate exactly `o` in-sample. At 0 the drivers
+  are uncorrelated and panels are skipped independently; at 1 all panels are
+  skipped on the same rows, so co-missingness spans panels as well as within
+  them. **This is the dose-response knob.** Requires `n_panels + 1 ≤` number
+  of always-observed features (asserted).
+
+  *Why not "the fraction of panels sharing one driver"* (the original
+  wording): with 2 panels — concrete, wine, energy — that fraction can only
+  be 0, ½ or 1, and ½ means one panel shares a driver with nobody, so
+  `o = 0.5` would equal `o = 0` and E1 would have no cross-panel structure.
+  The continuous form gives a smooth dose-response on any panel count.
 - `class_spread ∈ [0,1]` (CD-MNAR only) — how unequal the per-outcome-bin rates
   are. At 0 it collapses to MCAR.
 
@@ -160,6 +181,11 @@ Two hard checks, printed with a PASS/FAIL verdict:
   fixed tolerance — a fixed tolerance just measures `n`.
 - **Dose-response:** sweeping `driver_overlap` 0 → 1 must raise cross-panel φ
   monotonically. Same for `class_spread`.
+
+**Dataset precondition**, printed as ACCEPT/REJECT: reject a dataset if the
+median `|corr|` among its maskable features (design rows) exceeds **0.9**, or if
+any mechanism is flagged UNREALISTIC. Near-collinear maskable features make
+panels copies of one signal. naval (median 0.995) is rejected on this rule.
 
 Save the output to `results/injector_validation/<dataset>.txt`.
 
@@ -326,7 +352,7 @@ all rather than weighting well.
 
 ## 10. Experiments
 
-Each runs on concrete, housing, wine and naval, **reported per dataset, never pooled**,
+Each runs on concrete, housing, wine and energy, **reported per dataset, never pooled**,
 every client as receiver in turn, 10 seeds. Each produces a report via the
 `run-report` skill.
 
