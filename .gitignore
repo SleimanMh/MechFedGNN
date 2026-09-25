@@ -1,0 +1,18 @@
+# data and outputs
+raw/
+injected/
+results/
+*.npy
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
