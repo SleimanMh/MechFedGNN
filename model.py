@@ -15,6 +15,12 @@ torch.use_deterministic_algorithms(True)
 torch.set_num_threads(1)
 
 Z_CLIP = 5.0
+CLIP_STATS = {"observed": 0, "clipped": 0, "calls": 0, "calls_with_clip": 0}
+
+
+def reset_clip_stats():
+    for k in CLIP_STATS:
+        CLIP_STATS[k] = 0
 
 
 class MaskMLP(nn.Module):
@@ -64,8 +70,14 @@ class Standardiser:
     def inputs(self, X, M):
         # Clip: a shrunk receiver can observe a rarely-ordered feature only 2-3
         # times, giving a near-zero sd and |z| in the hundreds on other folds.
-        z = np.clip((X - self.mu) / self.sd, -Z_CLIP, Z_CLIP)
-        x = np.where(M.astype(bool), z, 0.0)
+        raw = (X - self.mu) / self.sd
+        obs = M.astype(bool)
+        n_clip = int((obs & (np.abs(raw) > Z_CLIP)).sum())
+        CLIP_STATS["observed"] += int(obs.sum())
+        CLIP_STATS["clipped"] += n_clip
+        CLIP_STATS["calls"] += 1
+        CLIP_STATS["calls_with_clip"] += n_clip > 0
+        x = np.where(obs, np.clip(raw, -Z_CLIP, Z_CLIP), 0.0)
         return torch.tensor(np.concatenate([x, M], 1), dtype=torch.float32)
 
     def target(self, y):
@@ -95,6 +107,36 @@ def train(params, d, xin, yt, steps, seed, cfg, checkpoints=(), on_checkpoint=No
         if step in marks and on_checkpoint:
             on_checkpoint(step, get_params(model))
     return get_params(model)
+
+
+def train_early_stopping(params, d, xin, yt, xval, yval, seed, cfg, es):
+    """Adam on MSE, validation MSE checked every `es['eval_every']` steps; stop
+    after `es['patience']` checks without improvement or at `es['max_steps']`,
+    and return the best parameters with the step they were reached at."""
+    model = build(params, d, cfg["hidden"])
+    opt = torch.optim.Adam(model.parameters(), lr=cfg["lr"])
+    gen = torch.Generator().manual_seed(int(seed))
+    n, bs = len(yt), min(cfg["batch"], len(yt))
+
+    def val_loss():
+        with torch.no_grad():
+            return float(((model(xval) - yval) ** 2).mean())
+
+    best, best_step, best_params, waited = val_loss(), 0, get_params(model), 0
+    for step in range(1, es["max_steps"] + 1):
+        idx = torch.randperm(n, generator=gen)[:bs]
+        opt.zero_grad()
+        ((model(xin[idx]) - yt[idx]) ** 2).mean().backward()
+        opt.step()
+        if step % es["eval_every"] == 0:
+            v = val_loss()
+            if v < best:
+                best, best_step, best_params, waited = v, step, get_params(model), 0
+            else:
+                waited += 1
+                if waited >= es["patience"]:
+                    break
+    return best_params, best_step
 
 
 def predict(params, d, xin, st, hidden=(64, 32)):

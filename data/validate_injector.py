@@ -10,7 +10,7 @@ from contextlib import redirect_stdout
 
 import numpy as np
 
-from data.clients import client_pool, group_profiles
+from data.clients import BORDERLINE_TRAIN, MIN_TRAIN, client_pool, group_profiles, size_check
 from data.design import load_dataset
 from data.inject import inject, load_or_build_roles, panel_probs_for_rate
 
@@ -78,12 +78,21 @@ def summarise(label, runs):
             f"   [{' '.join(f'{h:.2f}' for h in hist)}] {flag}")
 
 
-def precondition(roles, flags):
-    """A dataset is usable only if its maskable features are not near-collinear
-    and no mechanism produces an all-or-nothing (unrealistic) panel pattern."""
+K_CLIENTS, SPLIT = 6, (0.6, 0.2, 0.2)
+
+
+def precondition(roles, flags, train_sizes=None):
+    """A dataset is usable only if: its maskable features are not near-collinear;
+    no mechanism produces an all-or-nothing (unrealistic) panel pattern; it has
+    at least 2 panels (else both latent groups get the same profile, §4.1); and
+    every client trains on >= MIN_TRAIN rows."""
     med = roles["panel_corr_median"]
     bad = [label for label, f in flags.items() if f == "UNREALISTIC"]
     reasons = []
+    if len(roles["panels"]) < 2:
+        reasons.append(f"only {len(roles['panels'])} panel(s): no latent group structure possible")
+    if train_sizes is not None and min(train_sizes) < MIN_TRAIN:
+        reasons.append(f"smallest client training fold {min(train_sizes)} < {MIN_TRAIN} rows")
     if med > MAX_MASKABLE_CORR:
         reasons.append(f"median |corr| among maskable {med:.3f} > {MAX_MASKABLE_CORR}")
     if bad:
@@ -149,9 +158,14 @@ def validate(name, raw_dir, rate, jitter):
     spread = max(base.values()) - min(base.values())
     verdicts.append("RATE calibration: " + " ".join(f"{k}={v:.3f}" for k, v in base.items())
                     + f"  spread={spread:.3f} -> {'PASS' if spread <= 0.02 else 'FAIL'}")
-    ok, reasons = precondition(roles, flags)
+    status, sizes = size_check(len(df), K_CLIENTS, SPLIT)
+    verdicts.append(f"CLIENT SIZE: training rows per client {sizes} (min {MIN_TRAIN}, "
+                    f"borderline < {BORDERLINE_TRAIN}) -> {status}"
+                    + ("  WARNING: borderline" if status == "WARN" else ""))
+    ok, reasons = precondition(roles, flags, sizes)
     verdicts.append(f"PRECONDITION (median maskable |corr| {roles['panel_corr_median']:.3f} <= "
-                    f"{MAX_MASKABLE_CORR}, no UNREALISTIC mechanism): "
+                    f"{MAX_MASKABLE_CORR}, no UNREALISTIC mechanism, >= 2 panels, "
+                    f">= {MIN_TRAIN} training rows per client): "
                     + ("ACCEPT" if ok else "REJECT - " + "; ".join(reasons)))
     print("\n" + "\n".join(verdicts))
     return roles, ok
@@ -159,7 +173,7 @@ def validate(name, raw_dir, rate, jitter):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--datasets", nargs="+", default=["concrete", "housing", "wine", "energy"])
+    ap.add_argument("--datasets", nargs="+", default=["concrete", "wine", "energy", "kin8nm", "power"])
     ap.add_argument("--raw", default="./raw")
     ap.add_argument("--rate", type=float, default=0.3)
     ap.add_argument("--jitter", type=float, default=0.05)

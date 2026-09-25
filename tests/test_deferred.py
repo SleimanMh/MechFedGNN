@@ -37,18 +37,24 @@ def _verdicts(df, cfg, seed=11):
     return [r["verdict"] for r in rows], [r["rel_headroom"] for r in rows]
 
 
-def test_headroom_ok_for_small_receiver():
-    df = _synthetic_df(6000)
-    v, rel = _verdicts(df, _cfg(**{"clients.receiver_fraction": 0.05}))
+def test_headroom_ok_when_pooling_adds_information():
+    # ~125 training rows per client on a nonlinear, low-noise target, and no
+    # latent missingness groups (every panel usually ordered, MCAR): the pooled
+    # rows (4x) carry information a local model cannot get. Under the default
+    # group structure pooling can instead HURT (negative headroom) - that is a
+    # property of the design, not of the detector, so it is not used here.
+    df = _synthetic_df(1000)
+    v, rel = _verdicts(df, _cfg(**{"injection.mechanism": "mcar", "clients.p_rare": 0.9,
+                                   "clients.receiver_p_rare": 0.9}))
     assert all(x == "HEADROOM OK" for x in v), (v, rel)
 
 
-def test_no_headroom_when_receiver_gets_full_sized_sample():
-    # A linear target that ~1600 local rows already pin down, and enough local
-    # steps to converge: with the default 300 the remaining gap is optimisation
-    # (the oracle gets K x the steps), not data.
+def test_no_headroom_when_receiver_sample_is_abundant():
+    # ~1600 training rows per client on a linear target: the receiver's own
+    # sample already pins the function down. Both references are early-stopped
+    # on the same validation fold, so no step-count advantage remains.
     df = _synthetic_df(12000, noise=1.0, linear=True)
-    v, rel = _verdicts(df, _cfg(**{"clients.receiver_fraction": 1.0, "model.local_steps": 1500}))
+    v, rel = _verdicts(df, _cfg())
     assert all(x == "NO HEADROOM" for x in v), (v, rel)
 
 

@@ -1,5 +1,6 @@
 # Frozen defaults (CLAUDE.md §1, §4, §7, §8). Pilot-chosen values are marked.
-datasets: [concrete, housing, wine, energy]
+# Candidates; a dataset runs only if it passes every precondition (validate_injector).
+datasets: [concrete, wine, energy, kin8nm, power]
 seeds: [11, 23, 37, 53, 71, 89, 101, 113, 131, 149]
 
 clients:
@@ -11,7 +12,7 @@ clients:
   split: [0.6, 0.2, 0.2]
   population: population_homogeneous
   frac_low: [0.8, 0.2, 0.8, 0.2, 0.8, 0.2]   # stratified only; cross-cuts groups [0,0,0,1,1,1]
-  receiver_fraction: 0.2                     # PILOT - chosen by pilots.py
+  receiver_p_rare: 0.15                      # receiver orders its group's rare panels at this (group: p_rare)
 
 injection:
   mechanism: mar
@@ -25,8 +26,7 @@ model:
   lr: 0.001
   batch: 64
   local_steps: 300
-  adapt_budget: 50                           # PILOT - chosen by pilots.py
-  pooled_steps_per_client: 1                 # oracle steps = K * (local_steps + adapt_budget)
+  adapt_budget: 10                           # PILOT - chosen by pilots.py
 
 aggregation:
   alpha: 1.0          # score arms use the score only; missing score -> size anchor
@@ -37,3 +37,7 @@ aggregation:
 headroom:
   none_max: 0.02
   thin_max: 0.10
+  early_stopping:      # same protocol for the local and pooled references
+    eval_every: 25
+    patience: 20       # checks without improvement (= 500 steps)
+    max_steps: 5000

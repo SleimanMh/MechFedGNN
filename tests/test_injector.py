@@ -118,9 +118,14 @@ def test_constant_columns_never_maskable_or_characteristic():
     assert "f2" not in roles["bin_edges"]
 
 
-def test_precondition_rejects_collinear_or_unrealistic():
-    assert precondition({"panel_corr_median": 0.3}, {"mcar": "ok"}) == (True, [])
-    ok, why = precondition({"panel_corr_median": 0.95}, {"mcar": "ok"})
+def test_precondition_rejects_collinear_unrealistic_single_panel_or_small():
+    good = {"panel_corr_median": 0.3, "panels": [[0], [1]]}
+    assert precondition(good, {"mcar": "ok"}, [150] * 6) == (True, [])
+    ok, why = precondition({**good, "panel_corr_median": 0.95}, {"mcar": "ok"})
     assert not ok and "0.950 > 0.9" in why[0]
-    ok, why = precondition({"panel_corr_median": 0.3}, {"fd_mnar top": "UNREALISTIC"})
+    ok, why = precondition(good, {"fd_mnar top": "UNREALISTIC"})
     assert not ok and "fd_mnar top" in why[0]
+    ok, why = precondition({**good, "panels": [[0, 1]]}, {})
+    assert not ok and "no latent group structure" in why[0]
+    ok, why = precondition(good, {}, [150, 150, 99])
+    assert not ok and "99 < 100" in why[0]

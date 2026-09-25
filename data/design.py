@@ -5,7 +5,6 @@ column roles, panel assignment and histogram bin edges, so those frozen design
 choices never see a row that some client later trains, tunes or tests on.
 """
 import os
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -13,21 +12,19 @@ import pandas as pd
 DESIGN_SEED = 0
 DESIGN_FRAC = 0.10
 DESIGN_MIN = 150
-DESIGN_CAP = 0.30
 
 
 def design_size(n):
-    """max(10% of n, 150), capped at 30% of n."""
-    return int(min(max(round(DESIGN_FRAC * n), DESIGN_MIN), int(DESIGN_CAP * n)))
+    """Flat 10% of n; the 150-row floor applies only when 10% is smaller."""
+    if n <= DESIGN_MIN:
+        raise ValueError(f"n={n} rows cannot spare a {DESIGN_MIN}-row design split")
+    return int(max(round(DESIGN_FRAC * n), DESIGN_MIN))
 
 
 def design_split(n, seed=DESIGN_SEED):
     """Return (design_idx, pool_idx), sorted, disjoint, covering range(n)."""
-    n_design = design_size(n)
-    if n_design < DESIGN_MIN:
-        warnings.warn(f"design split has only {n_design} rows (< {DESIGN_MIN}); "
-                      "roles, panels and bin edges will be noisy")
     perm = np.random.default_rng(seed).permutation(n)
+    n_design = design_size(n)
     return np.sort(perm[:n_design]), np.sort(perm[n_design:])
 
 

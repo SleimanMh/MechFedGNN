@@ -1,5 +1,3 @@
-import warnings
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -38,15 +36,13 @@ def test_roles_depend_only_on_design_rows():
     assert build_roles(df) == build_roles(perturbed)
 
 
-def test_design_size_floor_and_cap():
-    assert design_size(506) == 150            # floor of 150 beats 10%
-    assert design_size(1599) == 160           # 10% beats the floor
-    assert design_size(300) == 90             # cap at 30% of n
-    with pytest.warns(UserWarning, match="only 90 rows"):
-        design_split(300)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        design_split(1030)                    # >= 150 rows: no warning
+def test_design_size_flat_ten_percent_with_floor():
+    assert design_size(1599) == 160           # 10%
+    assert design_size(8192) == 819           # 10%
+    assert design_size(1030) == 150           # floor: 10% would be 103
+    assert design_size(506) == 150            # floor, no cap any more
+    with pytest.raises(ValueError):
+        design_size(150)
 
 
 def test_load_drops_exact_duplicate_columns(tmp_path):

@@ -13,6 +13,8 @@ from data.inject import inject
 P_RARE = 0.2
 P_USUAL = 0.9
 PROFILE_NOISE = 0.05
+MIN_TRAIN = 100        # precondition: every client has at least this many training rows
+BORDERLINE_TRAIN = 120 # below this, warn
 
 
 def group_profiles(n_panels, p_rare=P_RARE, p_usual=P_USUAL):
@@ -40,6 +42,25 @@ def client_profiles(n_panels, rng, K=6, G=2, noise=PROFILE_NOISE, p_rare=P_RARE,
     base = group_profiles(n_panels, p_rare, p_usual)[groups]
     prof = np.clip(base + rng.uniform(-noise, noise, base.shape), 0.05, 0.95)
     return prof, groups
+
+
+def rare_panels(n_panels, group):
+    """Indices of the panels the group habitually skips (see group_profiles)."""
+    half = n_panels // 2
+    return list(range(half)) if group == 0 else list(range(n_panels - half, n_panels))
+
+
+def client_train_sizes(n, K, split):
+    """Training-fold size of each client under homogeneous assignment."""
+    parts = np.array_split(np.arange(len(client_pool(n))), K)
+    return [int(round(split[0] * len(p))) for p in parts]
+
+
+def size_check(n, K, split):
+    """('OK' | 'WARN' | 'FAIL', sizes). FAIL if any client trains on < MIN_TRAIN rows."""
+    sizes = client_train_sizes(n, K, split)
+    status = "FAIL" if min(sizes) < MIN_TRAIN else "WARN" if min(sizes) < BORDERLINE_TRAIN else "OK"
+    return status, sizes
 
 
 def client_pool(n):
@@ -103,21 +124,34 @@ def build_clients(df, roles, cfg, seed):
         raise ValueError(cc["population"])
     clients = []
     for k, rows in enumerate(parts):
-        crng = np.random.default_rng([seed, 1, k])
-        M, _ = inject(X[rows], y[rows], roles, prof[k], inj["mechanism"], crng,
-                      jitter=inj["jitter"], driver_overlap=inj["driver_overlap"],
-                      class_spread=inj["class_spread"], direction=inj["direction"],
-                      driver_seed=seed)
-        clients.append({"id": f"c{k}", "rows": rows, "X": X[rows], "y": y[rows], "M": M,
-                        "profile": prof[k], "group": int(groups[k]),
-                        **_split(len(rows), cc["split"], crng)})
+        M = _inject_client(X[rows], y[rows], roles, prof[k], inj, seed, k)
+        split = _split(len(rows), cc["split"], np.random.default_rng([seed, 3, k]))
+        clients.append({"id": f"c{k}", "k": k, "rows": rows, "X": X[rows], "y": y[rows], "M": M,
+                        "profile": prof[k], "group": int(groups[k]), **split})
+    small = [c["id"] for c in clients if len(c["train"]) < MIN_TRAIN]
+    if small:
+        raise ValueError(f"precondition failed: clients {small} have < {MIN_TRAIN} training rows "
+                         f"({[len(c['train']) for c in clients]})")
     return clients, groups
 
 
-def shrink_receiver(client, fraction, seed):
-    """Copy of `client` whose TRAINING fold is cut to `fraction` of its size.
-    Validation and test folds are untouched so evaluation stays comparable."""
-    rng = np.random.default_rng([seed, 2, int(client["id"][1:])])
-    tr = client["train"]
-    keep = max(2, int(round(fraction * len(tr))))
-    return {**client, "train": np.sort(rng.choice(tr, keep, replace=False))}
+def _inject_client(X, y, roles, profile, inj, seed, k):
+    """Deterministic per (seed, k): re-injecting with another profile reuses the
+    same random draws, so the receiver's asymmetric mask differs only through
+    the ordering probabilities (common random numbers)."""
+    return inject(X, y, roles, profile, inj["mechanism"], np.random.default_rng([seed, 1, k]),
+                  jitter=inj["jitter"], driver_overlap=inj["driver_overlap"],
+                  class_spread=inj["class_spread"], direction=inj["direction"],
+                  driver_seed=seed)[0]
+
+
+def asymmetric_receiver(client, roles, cfg, seed):
+    """Copy of `client` as receiver: its ordering probability on the panels its
+    group skips is lowered by (receiver_p_rare - p_rare), e.g. 0.20 -> 0.15, and
+    the mask is re-injected. Size, rows and splits are unchanged."""
+    cc = cfg["clients"]
+    prof = client["profile"].copy()
+    idx = rare_panels(len(prof), client["group"])
+    prof[idx] = np.clip(prof[idx] + cc["receiver_p_rare"] - cc["p_rare"], 0.01, 0.95)
+    M = _inject_client(client["X"], client["y"], roles, prof, cfg["injection"], seed, client["k"])
+    return {**client, "M": M, "profile": prof}

@@ -101,9 +101,11 @@ def build_report(cfg, name, df, roles, dropped, outs):
           f"- Design split: {roles['n_design_rows']} rows (seed {roles['design_seed']}), excluded from all clients.",
           f"- Clients: K = {cc['K']}, rows assigned `{cc['population']}`, disjoint; per-client split "
           f"{cc['split']} (train/val/test) drawn per run seed; seeds {cfg['seeds']}.",
-          f"- Split sizes, seed {cfg['seeds'][0]} (before receiver shrinking): "
-          + "; ".join(f"{c} {v['n_train']}/-/-" for c, v in first.items()),
-          f"- Receiver training fold shrunk to {cc['receiver_fraction']} of its size; val/test untouched.",
+          f"- Training-fold sizes, seed {cfg['seeds'][0]}: "
+          + "; ".join(f"{c} {v['n_train']}" for c, v in first.items()),
+          f"- Missingness asymmetry: as receiver, a client orders its group's rarely-ordered panels at "
+          f"{cc['receiver_p_rare']} instead of {cc['p_rare']} (mask re-injected, same random draws); "
+          "sizes unchanged.",
           f"- Native NaNs before injection: {int(df.isna().sum().sum())} (asserted zero at download).", ""]
 
     mk = [feats[i] for i in roles["maskable"]]
@@ -168,6 +170,8 @@ def build_report(cfg, name, df, roles, dropped, outs):
           f"- alpha {ac['alpha']}, beta {ac['beta']}, gamma {ac['gamma']} (fedavg: gamma = p_i), "
           f"lambda_pop {ac['lambda_pop']}, adaptation budget {mc['adapt_budget']} steps "
           f"(local-only: {mc['local_steps']} + {mc['adapt_budget']}).",
+          "- Headroom references (local, pooled) share one protocol: from theta_0, early-stopped on the "
+          "receiver's validation fold, evaluated on its test fold.",
           f"- FedAvg limit check in this run: {'PASSED' if fedavg_limit_ok() else 'FAILED'}.", ""]
 
     L += ["## 6. Results and ablations", ""]

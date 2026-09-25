@@ -1,15 +1,16 @@
 """One-round protocol (CLAUDE.md §8, §9).
 
 Per run seed: one theta_0; every client trains locally (L_pred only); summaries
-from training rows; then every client in turn is the receiver (its training
-fold shrunk by receiver_fraction), and each arm aggregates, is evaluated
+from training rows; then every client in turn is the receiver (full size, but
+ordering its group's rarely-ordered panels even less often - missingness
+asymmetry, §4.4), and each arm aggregates, is evaluated
 (timepoint 1 = budget 0), adapted on the receiver's training rows and evaluated
 again (timepoint 2). local-only gets the same total step count.
 """
 import numpy as np
 
-from data.clients import build_clients, shrink_receiver
-from headroom import headroom_row, pooled_oracle
+from data.clients import asymmetric_receiver, build_clients
+from headroom import headroom_row, reference_losses
 from kernel import aggregate, donor_weights
 from model import Standardiser, init_params, metrics, predict, train
 from scores import combined_q, missingness_similarity, rate_similarity, w_c, w_h
@@ -84,7 +85,7 @@ def run_seed(df, roles, cfg, seed, split="test", budgets=None):
                       for k, c in enumerate(clients)}}
 
     for i, full in enumerate(clients):
-        rec = shrink_receiver(full, cfg["clients"]["receiver_fraction"], seed)
+        rec = asymmetric_receiver(full, roles, cfg, seed)
         theta_i, st = fit_local(rec, 21)
         view = clients[:i] + [rec] + clients[i + 1:]
         summ = summ_full[:i] + [summaries(rec, roles)] + summ_full[i + 1:]
@@ -132,8 +133,8 @@ def run_seed(df, roles, cfg, seed, split="test", budgets=None):
                 out["scores"].append({"seed": seed, "receiver": rec["id"], "donor": clients[j]["id"],
                                       "score": name, "value": sc[name], "U_t1": U1, "U_t2": U2,
                                       "Q_source": sc["Q_source"]})
-        oracle = pooled_oracle(theta0, d, view, st, cfg, _seed(seed, 40, i))
-        loss_pooled = metrics(y_ev, predict(oracle, d, xin_ev, st, tuple(mc["hidden"])), st.y_median)["rmse"]
+        ref = reference_losses(theta0, d, rec, view, st, cfg, _seed(seed, 40, i))
         out["headroom"].append({"seed": seed, "receiver": rec["id"], "n_train": len(rec["train"]),
-                                **headroom_row(local_traj[main_b]["rmse"], loss_pooled, cfg)})
+                                "rate_maskable": float(1 - rec["M"][rec["train"]][:, roles["maskable"]].mean()),
+                                **headroom_row(ref, cfg)})
     return out

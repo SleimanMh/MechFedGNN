@@ -22,7 +22,7 @@ Mask convention everywhere: **`M = 1` observed, `M = 0` missing**; absence
 
 | Item | Decision |
 |---|---|
-| Data | GRAPE-9 UCI suite, fetched by a script you write (§2). Start with **concrete, housing, wine, energy** (naval rejected by the §3.5 precondition). Complete data + injected missingness. |
+| Data | GRAPE-9 UCI suite, fetched by a script you write (§2). Candidates **concrete, wine, energy, kin8nm, power**; a dataset runs only if it passes every §3.5 precondition (currently: wine, kin8nm). Complete data + injected missingness. |
 | Task | Regression (MSE). AUC-ROC additionally reported by binarising the target at the **training-fold median** and ranking the regression predictions. No second model. |
 | Backbone | Mask-aware MLP: input `concat([x_zero_filled, M])`, hidden (64, 32), ReLU, 1 output. |
 | Loss | **`L = L_pred` only.** No reconstruction term, no reconstruction head. |
@@ -51,7 +51,7 @@ feature/target split matches the GRAPE paper.
 - **Assert zero NaNs** in every downloaded file and print `n`, `d` per dataset.
   Controlled injection is only meaningful on complete data — if a file has
   native NaNs, fail loudly.
-- CLI: `--out ./raw`, `--datasets concrete housing wine energy`
+- CLI: `--out ./raw`, `--datasets concrete wine energy kin8nm power`
 - At load time (`data/design.py: load_dataset`), **exact-duplicate feature
   columns are dropped** (first kept), logged, and the reduced `d` reported.
   A duplicate would otherwise be a panel member with φ ≡ its twin.
@@ -67,13 +67,11 @@ meant to detect.
 
 ### 3.0 Design split (`data/design.py`)
 
-A fixed set of `max(10% of n, 150)` rows, capped at 30% of n (seed 0), is
-**excluded from every client** and used only
+A flat **10%** of rows (seed 0), with a **150-row floor that applies only when
+10% is smaller** (no upper cap), is **excluded from every client** and used only
 for column roles (§3.1), panel assignment (§3.2) and histogram bin edges
 (§4.3). Frozen design choices therefore never see a row any client trains,
-tunes or tests on. Tested: no design row ever appears in a client. Under
-150 design rows (only when the 30% cap binds) a warning is raised: roles,
-panels and bin edges from so few rows are noisy.
+tunes or tests on. Tested: no design row ever appears in a client.
 
 ### 3.1 Column roles (computed once per dataset, frozen in config)
 
@@ -184,8 +182,12 @@ Two hard checks, printed with a PASS/FAIL verdict:
 
 **Dataset precondition**, printed as ACCEPT/REJECT: reject a dataset if the
 median `|corr|` among its maskable features (design rows) exceeds **0.9**, or if
-any mechanism is flagged UNREALISTIC. Near-collinear maskable features make
-panels copies of one signal. naval (median 0.995) is rejected on this rule.
+any mechanism is flagged UNREALISTIC, or if it forms **fewer than 2 panels**
+(both latent groups would get the same profile, §4.1), or if **any client has
+fewer than 100 training rows** (under 120 prints a borderline warning; also
+enforced in `build_clients`). Near-collinear maskable features make panels
+copies of one signal. Rejected so far: naval (median 0.995), concrete (88
+training rows/client), energy (62), power (d = 4 -> one panel).
 
 Save the output to `results/injector_validation/<dataset>.txt`.
 
@@ -245,10 +247,18 @@ in the config.
 
 ### 4.4 Sizes
 
-Clients get equal shares by default. One config knob, `receiver_fraction`,
-shrinks whichever client is currently the receiver to a fraction of its normal
-size (default 0.3). A receiver with abundant data has nothing to learn from
-anyone, which produces an uninterpretable null — see the headroom check (§8).
+Every client keeps its full, equal share — the receiver included. The
+receiver instead differs by **missingness asymmetry**: while it is the
+receiver, a client orders the panels its group skips at `receiver_p_rare`
+(default **0.15**) instead of the group baseline `p_rare = 0.2` (applied as a
+shift of its own noisy profile), and its mask is re-injected with the same
+random draws, so only those panels change. Size, rows and splits are
+untouched.
+
+*Why not `receiver_fraction` (the original knob):* shrinking the receiver to
+0.2–0.3 of its size left it 7–29 training rows; headroom then mostly measured
+"a 7-row model is bad", adaptation overfit, and the single-seed pilot was
+non-monotone (Stage 2 commit `70e3408`).
 
 ## 5. Quantities (`signatures.py`, pure NumPy)
 
@@ -328,7 +338,11 @@ U(i←j) = L_i(local reference) − L_i(model incorporating j)
 **Headroom, run before every comparison.** On the receiver's test fold, under
 its own mask: `loss_local` (own training rows only) vs `loss_pooled` (oracle
 trained on pooled training rows of all clients, evaluated under the receiver's
-mask — the upper bound for parameter aggregation). `headroom = loss_local −
+mask — the upper bound for parameter aggregation). **Both references are
+trained under the same protocol** — from `θ0`, receiver's standardisation,
+Adam, early-stopped on the receiver's validation fold (check every 25 steps,
+patience 20 checks, max 5000 steps) — so headroom measures information, not
+step count. `headroom = loss_local −
 loss_pooled`. Verdicts: `headroom/loss_local ≤ 0.02` → **NO HEADROOM**;
 `≤ 0.10` → THIN; else OK. Print above every results table. Pooling is a
 diagnostic only — never an arm, never a weight source.
@@ -352,7 +366,7 @@ all rather than weighting well.
 
 ## 10. Experiments
 
-Each runs on concrete, housing, wine and energy, **reported per dataset, never pooled**,
+Each runs on every dataset passing the §3.5 preconditions, **reported per dataset, never pooled**,
 every client as receiver in turn, 10 seeds. Each produces a report via the
 `run-report` skill.
 
@@ -419,11 +433,11 @@ missing-panels-per-row realism table.
 **STOP** — show full pytest output.
 
 **Stage 2 — clients, model, loop, headroom, report.** Then pilot the adaptation
-budget: scan `{0, 10, 25, 50, 100}` on one seed and the validation fold, pick the
+budget: scan `{0, 10, 25, 50, 100}` over 3 seeds on the validation fold, pick the
 smallest that separates arms stably, freeze it in `defaults.yaml` with a printed
-justification. Also sweep `receiver_fraction ∈ {0.2, 0.3, 0.5}` and pick the
-largest that still gives HEADROOM OK.
-**STOP** — show headroom verdicts per client and the chosen budget and fraction.
+justification. Report headroom per client (test fold, early-stopped references),
+client training sizes, and how often the ±5 input clip fires.
+**STOP** — show headroom verdicts per client and the chosen budget.
 
 **Stage 3 — experiments.** `run_e1.py`, then `run_e2.py`, then `run_e3.py`.
 **STOP after E1** — show the full report before running E2.
@@ -453,8 +467,11 @@ fully observed and 50 rows with X and Z missing together; Y always observed.
 - `S`: identical histograms → 1.0; disjoint → 0.0; a characteristic in only one
   client is ignored (not 0); none shared → `None`
 - fallback hierarchy: all four branches
-- headroom detects both states: OK at the chosen `receiver_fraction`,
-  NO HEADROOM when the receiver gets a full-sized sample
+- headroom detects both states: OK when pooling adds information (small
+  clients, no latent groups), NO HEADROOM when the receiver's own sample is
+  abundant
+- missingness asymmetry changes only the receiver's rare panels; size unchanged
+- clients with < 100 training rows are refused
 - determinism: same seed → identical CSVs
 
 ## 14. Do not build
