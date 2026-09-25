@@ -1,0 +1,232 @@
+"""Run artefacts and REPORT.md, per the run-report skill (.claude/skills/run-report).
+
+One run = one dataset x one config x all seeds. Writes, under
+results/<exp>/<run_id>/: REPORT.md (six fixed sections), config.json,
+metrics.csv, scores.csv, params/<client>.json.
+"""
+import datetime
+import hashlib
+import json
+import os
+import subprocess
+
+import numpy as np
+import pandas as pd
+from scipy.stats import kendalltau
+
+from kernel import aggregate, donor_weights
+from loop import ARMS
+
+SCORES = ["W_H", "W_C", "s", "rate", "S", "Q"]
+READING = """| Result | Interpretation |
+|---|---|
+| A score's ordering tracks `U` | That signal carries information about useful transfer |
+| No score tracks `U` | The proxies miss what matters in this setting |
+| An arm beats local-only and uniform-donor | Its weighting is doing real work |
+| An arm beats local-only but not uniform-donor | The gain is from collaborating at all, not from the weights |
+| Gains at timepoint 1 but not timepoint 2 | The benefit may be limited to initialisation |
+| NO HEADROOM verdict | No aggregation rule could have improved on local training here |"""
+
+
+def run_id(cfg):
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
+                             text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        sha = "nogit"
+    h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
+    return f"{datetime.date.today():%Y%m%d}_{sha}_{h}"
+
+
+def frames(outs):
+    cat = lambda key: pd.DataFrame([r for o in outs for r in o[key]])
+    return cat("metrics"), cat("scores"), cat("weights"), cat("headroom")
+
+
+def write_csvs(out_dir, outs):
+    os.makedirs(out_dir, exist_ok=True)
+    m, s, _, _ = frames(outs)
+    m.to_csv(os.path.join(out_dir, "metrics.csv"), index=False, float_format="%.10g")
+    s.to_csv(os.path.join(out_dir, "scores.csv"), index=False, float_format="%.10g")
+
+
+def _jsonable(x):
+    if isinstance(x, dict):
+        return {k: _jsonable(v) for k, v in x.items()}
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    return x
+
+
+def _md(df, index=True):
+    """Minimal GitHub markdown table (avoids a tabulate dependency)."""
+    df = df.reset_index() if index else df
+    fmt = lambda v: f"{v:.4g}" if isinstance(v, float) else str(v)
+    head = [str(c) for c in df.columns]
+    body = [[fmt(v) for v in row] for row in df.itertuples(index=False)]
+    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    return "\n".join(lines + ["| " + " | ".join(r) + " |" for r in body])
+
+
+def _pairs(A, names, k, largest=True):
+    iu = np.triu_indices(len(A), 1)
+    order = np.argsort(A[iu])
+    order = order[::-1][:k] if largest else order[:k]
+    return ", ".join(f"{names[iu[0][o]]}-{names[iu[1][o]]}={A[iu][o]:.3f}" for o in order)
+
+
+def _mean_sd(g):
+    per_seed = g.groupby("seed")["value"].mean()
+    return per_seed.mean(), per_seed.std(ddof=0)
+
+
+def fedavg_limit_ok():
+    rng = np.random.default_rng(0)
+    p = np.array([0.1, 0.3, 0.6])
+    th = [rng.standard_normal(20) for _ in range(3)]
+    out = aggregate(th, 1, donor_weights(1, [0.5] * 3, p, 0.0, 1.0), p[1])
+    return bool(np.allclose(out, sum(pk * t for pk, t in zip(p, th)), atol=1e-8, rtol=0))
+
+
+def build_report(cfg, name, df, roles, dropped, outs):
+    m, s, w, h = frames(outs)
+    feats, inj, cc, ac, mc = roles["features"], cfg["injection"], cfg["clients"], cfg["aggregation"], cfg["model"]
+    first = outs[0]["params"]
+    L = [f"# Run report - {cfg.get('experiment', 'run')} / {name}", ""]
+
+    L += ["## 1. Data", "",
+          f"- Dataset `{name}`: n = {len(df)}, d = {len(feats)} (exact duplicates dropped: {dropped or 'none'}), "
+          "target column `target`; task: regression (MSE) + AUC-ROC of the regression output against "
+          "y > receiver training-fold median.",
+          f"- Design split: {roles['n_design_rows']} rows (seed {roles['design_seed']}), excluded from all clients.",
+          f"- Clients: K = {cc['K']}, rows assigned `{cc['population']}`, disjoint; per-client split "
+          f"{cc['split']} (train/val/test) drawn per run seed; seeds {cfg['seeds']}.",
+          f"- Split sizes, seed {cfg['seeds'][0]} (before receiver shrinking): "
+          + "; ".join(f"{c} {v['n_train']}/-/-" for c, v in first.items()),
+          f"- Receiver training fold shrunk to {cc['receiver_fraction']} of its size; val/test untouched.",
+          f"- Native NaNs before injection: {int(df.isna().sum().sum())} (asserted zero at download).", ""]
+
+    mk = [feats[i] for i in roles["maskable"]]
+    L += ["## 2. Missingness injection", "",
+          f"Maskable columns (identical for every client): {mk}. Panels: "
+          + ", ".join(f"P{k}={[feats[i] for i in P]}" for k, P in enumerate(roles["panels"])), "",
+          "| client | group | mechanism | panel ordering profile | driver_overlap | class_spread | direction "
+          "| realised rate (maskable) | mean lift | mean phi |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for c, v in first.items():
+        sig, idx = v["sig"], roles["maskable"]
+        r, H, C = sig["r"][idx], sig["H"][np.ix_(idx, idx)], sig["C"][np.ix_(idx, idx)]
+        iu = np.triu_indices(len(idx), 1)
+        rr = np.outer(r, r)[iu]
+        lift = np.mean(H[iu][rr > 0] / rr[rr > 0]) if (rr > 0).any() else float("nan")
+        L.append(f"| {c} | {v['group']} | {inj['mechanism']} | {np.round(v['profile'], 2).tolist()} | "
+                 f"{inj['driver_overlap']} | {inj['class_spread']} | {inj['direction']} | "
+                 f"{r.mean():.3f} | {lift:.2f} | {C[iu].mean():.3f} |")
+    L += ["", f"Mechanism `{inj['mechanism']}` with driver_overlap {inj['driver_overlap']}: each panel is "
+          "ordered or skipped as a block; the skip probability follows each client's panel profile, and "
+          "panels share part of their skip driver in proportion to driver_overlap, so gaps travel together "
+          "within panels and partly across them. Seed and realised values above are for the first run seed.", ""]
+
+    L += ["## 3. Computed parameters per client", "",
+          f"First run seed, unshrunk clients. Full matrices: `params/<client>.json`. "
+          f"Characteristics: {[feats[i] for i in roles['always_observed']]} on frozen design-split decile edges "
+          "(in `config.json` -> roles.bin_edges).", ""]
+    for c, v in first.items():
+        sig = v["sig"]
+        L += [f"**{c}** (p_j = {v['n_train'] / sum(x['n_train'] for x in first.values()):.3f})",
+              f"- r: {dict(zip(feats, np.round(sig['r'], 3).tolist()))}",
+              f"- H top5: {_pairs(sig['H'], feats, 5)}; mean {sig['H'][np.triu_indices(len(feats), 1)].mean():.3f}",
+              f"- J top5: {_pairs(sig['J'], feats, 5)}; mean {sig['J'][np.triu_indices(len(feats), 1)].mean():.3f}",
+              f"- C top5: {_pairs(sig['C'], feats, 5)}; bottom5: {_pairs(sig['C'], feats, 5, False)}; "
+              f"mean {sig['C'][np.triu_indices(len(feats), 1)].mean():.3f}; pairs excluded by constant rule: "
+              f"{int(sum(1 for a in range(len(feats)) for b in range(a + 1, len(feats)) if sig['r'][a] in (0, 1) or sig['r'][b] in (0, 1)))}",
+              f"- S histograms: " + "; ".join(f"{k}={np.round(hv, 2).tolist()}" for k, hv in v["hist"].items()), ""]
+
+    s0, w0 = s[s.seed == cfg["seeds"][0]], w[w.seed == cfg["seeds"][0]]
+    L += ["## 4. Client grouping", "", f"First run seed. Rows = receiver, columns = donor.", ""]
+    for sc in ["W_H", "W_C", "s", "S", "Q"]:
+        L += [f"**{sc}**", "", s0[s0.score == sc].pivot(index="receiver", columns="donor", values="value")
+              .round(3).pipe(_md), ""]
+    L += ["**Normalised donor weights per arm**", "",
+          w0.pivot_table(index=["receiver", "arm"], columns="donor", values="weight").round(3).pipe(_md), ""]
+    for rec, g in s0.groupby("receiver"):
+        undefined = [sc for sc in SCORES if g[g.score == sc]["value"].isna().all()]
+        tops = {sc: g[g.score == sc].sort_values("value", ascending=False)["donor"].tolist()
+                for sc in SCORES if sc not in undefined}
+        fb = g[g.Q_source != "formula"]["donor"].unique().tolist()
+        agree = "AGREE" if len({tuple(t) for t in tops.values()}) == 1 else "DISAGREE"
+        L.append(f"- receiver {rec}: " + "; ".join(f"{sc} favours {t[0]}" for sc, t in tops.items())
+                 + f". Donor ordering across defined scores: {agree}."
+                 + (f" UNDEFINED: {undefined} - that arm fell back to the size anchor p_j." if undefined else "")
+                 + (f" Q fallback fired for donors {fb}." if fb else ""))
+    L.append("")
+
+    L += ["## 5. Aggregation and headroom", ""]
+    hs = h.groupby("receiver").agg(loss_local=("loss_local", "mean"), loss_pooled=("loss_pooled", "mean"),
+                                   headroom=("headroom", "mean"), rel=("rel_headroom", "mean"),
+                                   verdicts=("verdict", lambda v: ", ".join(f"{k} x{int(n)}" for k, n in v.value_counts().items())))
+    L += [hs.round(4).pipe(_md), "",
+          f"- alpha {ac['alpha']}, beta {ac['beta']}, gamma {ac['gamma']} (fedavg: gamma = p_i), "
+          f"lambda_pop {ac['lambda_pop']}, adaptation budget {mc['adapt_budget']} steps "
+          f"(local-only: {mc['local_steps']} + {mc['adapt_budget']}).",
+          f"- FedAvg limit check in this run: {'PASSED' if fedavg_limit_ok() else 'FAILED'}.", ""]
+
+    L += ["## 6. Results and ablations", ""]
+    if (h.verdict == "NO HEADROOM").any():
+        L += ["> **NO HEADROOM** for " + ", ".join(sorted(h[h.verdict == 'NO HEADROOM'].receiver.unique()))
+              + ": results below are noise around the receiver's own optimum there.", ""]
+    for metric in ["rmse", "mae", "auc"]:
+        rows = []
+        for arm in ARMS:
+            row = {"arm": arm}
+            for tp in ["t1", "t2"]:
+                g = m[(m.metric == metric) & (m.arm == arm) & (m.timepoint == tp)]
+                loc = m[(m.metric == metric) & (m.arm == "local-only") & (m.timepoint == tp)]
+                mu, sd = _mean_sd(g)
+                row[tp] = f"{mu:.4f} +- {sd:.4f}"
+                row[f"delta_{tp}"] = f"{mu - _mean_sd(loc)[0]:+.4f}"
+            rows.append(row)
+        extra = f" Positive-class rate {m[m.metric == 'auc'].pos_rate.mean():.3f}." if metric == "auc" else ""
+        L += [f"**{metric.upper()}** (mean +- std over seeds of the receiver mean).{extra}", "",
+              pd.DataFrame(rows).pipe(_md, index=False), ""]
+    r2 = m[(m.metric == "rmse") & (m.timepoint == "t2")].pivot_table(index="arm", columns="receiver", values="value")
+    delta = r2.sub(r2.loc["local-only"], axis=1)
+    per = r2.copy()
+    per["mean"], per["worst"] = r2.mean(1), r2.max(1)
+    per["frac_harmed"] = (delta > 0).mean(1)
+    L += ["**Per-receiver RMSE, timepoint 2** (mean over seeds)", "", per.loc[ARMS].round(4).pipe(_md), ""]
+    u = s[s.score == "W_H"].groupby(["receiver", "donor"])[["U_t1", "U_t2"]].mean()
+    L += ["**Measured transfer benefit U[i<-j]** (RMSE reduction vs local-only; mean over seeds)", "",
+          u.round(4).pipe(_md), ""]
+    agree = []
+    for sc in SCORES:
+        hit1 = hit2 = n = 0
+        taus = []
+        for (_, _), g in s[s.score == sc].groupby(["seed", "receiver"]):
+            if g["value"].isna().any():
+                continue
+            n += 1
+            top = g.loc[g["value"].idxmax(), "donor"]
+            hit1 += top == g.loc[g["U_t1"].idxmax(), "donor"]
+            hit2 += top == g.loc[g["U_t2"].idxmax(), "donor"]
+            taus.append(kendalltau(g["value"], g["U_t1"]).statistic)
+        agree.append({"score": sc, "receiver-seeds": n, "top donor = top U (t1)": hit1,
+                      "top donor = top U (t2)": hit2, "mean Kendall tau vs U_t1": np.nanmean(taus) if taus else np.nan})
+    L += ["**Score-vs-U agreement**", "", pd.DataFrame(agree).round(3).pipe(_md, index=False), "",
+          "**Reading**", "", READING, ""]
+    return "\n".join(L)
+
+
+def write_run(exp, cfg, name, df, roles, dropped, outs, root="results"):
+    full = {**cfg, "experiment": exp, "dataset": name, "roles": roles}
+    out_dir = os.path.join(root, exp, run_id(full))
+    write_csvs(out_dir, outs)
+    os.makedirs(os.path.join(out_dir, "params"), exist_ok=True)
+    for c, v in outs[0]["params"].items():
+        with open(os.path.join(out_dir, "params", f"{c}.json"), "w") as f:
+            json.dump(_jsonable({**v["sig"], "hist": v["hist"], "n_train": v["n_train"],
+                                 "group": v["group"], "profile": v["profile"]}), f)
+    with open(os.path.join(out_dir, "config.json"), "w") as f:
+        json.dump(_jsonable(full), f, indent=2)
+    with open(os.path.join(out_dir, "REPORT.md"), "w", encoding="utf-8") as f:
+        f.write(build_report(full, name, df, roles, dropped, outs))
+    return out_dir

@@ -1,0 +1,39 @@
+# Frozen defaults (CLAUDE.md §1, §4, §7, §8). Pilot-chosen values are marked.
+datasets: [concrete, housing, wine, energy]
+seeds: [11, 23, 37, 53, 71, 89, 101, 113, 131, 149]
+
+clients:
+  K: 6
+  G: 2
+  p_rare: 0.2
+  p_usual: 0.9
+  profile_noise: 0.05
+  split: [0.6, 0.2, 0.2]
+  population: population_homogeneous
+  frac_low: [0.8, 0.2, 0.8, 0.2, 0.8, 0.2]   # stratified only; cross-cuts groups [0,0,0,1,1,1]
+  receiver_fraction: 0.2                     # PILOT - chosen by pilots.py
+
+injection:
+  mechanism: mar
+  driver_overlap: 0.5
+  class_spread: 0.0
+  direction: top
+  jitter: 0.05
+
+model:
+  hidden: [64, 32]
+  lr: 0.001
+  batch: 64
+  local_steps: 300
+  adapt_budget: 50                           # PILOT - chosen by pilots.py
+  pooled_steps_per_client: 1                 # oracle steps = K * (local_steps + adapt_budget)
+
+aggregation:
+  alpha: 1.0          # score arms use the score only; missing score -> size anchor
+  beta: 1.0           # no sharpening this round
+  gamma: 0.5          # self-weight for uniform-donor and all score arms
+  lambda_pop: 0.5
+
+headroom:
+  none_max: 0.02
+  thin_max: 0.10
