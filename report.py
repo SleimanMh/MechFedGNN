@@ -165,6 +165,8 @@ def build_report(cfg, name, df, roles, dropped, outs):
     L += ["## 5. Aggregation and headroom", ""]
     hs = h.groupby("receiver").agg(loss_local=("loss_local", "mean"), loss_pooled=("loss_pooled", "mean"),
                                    headroom=("headroom", "mean"), rel=("rel_headroom", "mean"),
+                                   pooling_harm=("pooling_harm", "mean"),
+                                   pooled_worse=("pooling_harm", lambda v: int((v > 0).sum())),
                                    verdicts=("verdict", lambda v: ", ".join(f"{k} x{int(n)}" for k, n in v.value_counts().items())))
     L += [hs.round(4).pipe(_md), "",
           f"- alpha {ac['alpha']}, beta {ac['beta']}, gamma {ac['gamma']} (fedavg: gamma = p_i), "
@@ -178,6 +180,9 @@ def build_report(cfg, name, df, roles, dropped, outs):
     if (h.verdict == "NO HEADROOM").any():
         L += ["> **NO HEADROOM** for " + ", ".join(sorted(h[h.verdict == 'NO HEADROOM'].receiver.unique()))
               + ": results below are noise around the receiver's own optimum there.", ""]
+    if (h.verdict == "POOLING HARMS").any():
+        L += ["> **POOLING HARMS** for " + ", ".join(sorted(h[h.verdict == 'POOLING HARMS'].receiver.unique()))
+              + ": indiscriminate pooling is worse than local there, beyond sampling noise.", ""]
     for metric in ["rmse", "mae", "auc"]:
         rows = []
         for arm in ARMS:

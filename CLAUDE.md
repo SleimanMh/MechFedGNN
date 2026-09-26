@@ -22,13 +22,13 @@ Mask convention everywhere: **`M = 1` observed, `M = 0` missing**; absence
 
 | Item | Decision |
 |---|---|
-| Data | GRAPE-9 UCI suite, fetched by a script you write (§2). Candidates **concrete, wine, energy, kin8nm, power**; a dataset runs only if it passes every §3.5 precondition (currently: wine, kin8nm). Complete data + injected missingness. |
+| Data | GRAPE-9 UCI suite, fetched by a script you write (§2). Candidates **concrete, wine, kin8nm, protein**; a dataset runs only if it passes every §3.5 precondition (at K = 4 all four pass; energy, power and naval are rejected). Complete data + injected missingness. |
 | Task | Regression (MSE). AUC-ROC additionally reported by binarising the target at the **training-fold median** and ranking the regression predictions. No second model. |
 | Backbone | Mask-aware MLP: input `concat([x_zero_filled, M])`, hidden (64, 32), ReLU, 1 output. |
 | Loss | **`L = L_pred` only.** No reconstruction term, no reconstruction head. |
-| Clients | `K = 6` in `G = 2` latent groups (§4). **Every client acts as receiver in turn** — gives per-client and worst-client results for free. |
+| Clients | `K = 4` in `G = 2` latent groups, 2 clients per group (§4). **Every client acts as receiver in turn** — gives per-client and worst-client results for free. (Was 6; reduced so concrete meets the ≥100 training-row precondition.) |
 | Splits | train / val / test = 60/20/20 per client, split first. Summaries use **training rows only**. Tuning on val. Test touched once. |
-| Standardisation | Receiver's own training-fold statistics. Never pooled, never from test. |
+| Standardisation | Receiver's own training-fold statistics. Never pooled, never from test. Features: **median / IQR over observed entries, no clipping** (IQR 0 → std → 1), so heavy tails are preserved but one extreme value cannot set the scale. Target: mean / std. (A ±5 clip was used in Stage 2 and removed.) |
 | Shared init | One `θ0` per run, copied by every client. |
 | Seeds | 10 paired seeds: `[11,23,37,53,71,89,101,113,131,149]`. Deterministic torch. |
 | β | Fixed at 1. No sharpening this round. |
@@ -186,8 +186,9 @@ any mechanism is flagged UNREALISTIC, or if it forms **fewer than 2 panels**
 (both latent groups would get the same profile, §4.1), or if **any client has
 fewer than 100 training rows** (under 120 prints a borderline warning; also
 enforced in `build_clients`). Near-collinear maskable features make panels
-copies of one signal. Rejected so far: naval (median 0.995), concrete (88
-training rows/client), energy (62), power (d = 4 -> one panel).
+copies of one signal. Rejected so far (at K = 4): naval (median 0.995),
+energy (92 training rows/client), power (d = 4 -> one panel). concrete (88 at
+K = 6) passes at K = 4 with 132.
 
 Save the output to `results/injector_validation/<dataset>.txt`.
 
@@ -213,7 +214,7 @@ of ordering probabilities over panels.
   (`±0.05`, clipped to [0.05, 0.95]), so clients within a group are similar but
   not identical
 
-`K = 6` clients: 3 per group. This is the **ground truth**. Two clients in the
+`K = 4` clients: 2 per group; the halves rule above is unchanged. This is the **ground truth**. Two clients in the
 same group lose the same panels; two clients in different groups lose
 complementary panels — so a donor from the *other* group is exactly the one that
 observes what the receiver lacks. Without this latent structure there is nothing
@@ -340,12 +341,22 @@ its own mask: `loss_local` (own training rows only) vs `loss_pooled` (oracle
 trained on pooled training rows of all clients, evaluated under the receiver's
 mask — the upper bound for parameter aggregation). **Both references are
 trained under the same protocol** — from `θ0`, receiver's standardisation,
-Adam, early-stopped on the receiver's validation fold (check every 25 steps,
-patience 20 checks, max 5000 steps) — so headroom measures information, not
-step count. `headroom = loss_local −
-loss_pooled`. Verdicts: `headroom/loss_local ≤ 0.02` → **NO HEADROOM**;
-`≤ 0.10` → THIN; else OK. Print above every results table. Pooling is a
-diagnostic only — never an arm, never a weight source.
+Adam, early-stopped on the receiver's validation fold (check every 25 steps;
+no stop before step 100; patience 50 checks = 1250 steps; max 5000 steps;
+best checkpoint restored) — so headroom measures information, not step count.
+`headroom = loss_local − loss_pooled`. Verdicts, in this order:
+
+- **POOLING HARMS** — pooled is worse than local *beyond sampling noise*:
+  on the receiver's test rows, `d_r = e²_pooled,r − e²_local,r`, and
+  `mean(d) > 2 · sd(d)/√n` (paired, same rows).
+- **NO HEADROOM** — `headroom/loss_local ≤ 0.02` (includes negative headroom
+  within noise).
+- **THIN** — `≤ 0.10`. Else **OK**.
+
+Also report the downside explicitly: `pooling_harm = loss_pooled − loss_local`
+where positive (0 otherwise), and the number of receiver-seeds in which pooling
+is worse than local. Print above every results table. Pooling is a diagnostic
+only — never an arm, never a weight source.
 
 ## 9. Arms (fixed list, always all of them)
 
@@ -373,8 +384,17 @@ every client as receiver in turn, 10 seeds. Each produces a report via the
 **E1 — signal comparison (the main one).**
 `population_homogeneous`, MAR with `driver_overlap = 0.5`, rate 0.3, the latent
 group structure of §4.1. All nine arms.
-Questions: does any score's donor ordering track measured `U`? Does any arm beat
-both `local-only` and `uniform-donor`?
+**Primary question (revised before E1, on the record):** under group-structured
+missingness, indiscriminate pooling can be *worse* than local training (the
+other group's rows observe exactly what the receiver lacks, and a model fitted
+to that mix transfers poorly to the receiver's mask — seen in the Stage 2
+pilots and the synthetic headroom tests). E1 therefore asks first **whether any
+weighting rule avoids the harm that indiscriminate pooling causes** — does it
+stay at or below `local-only` loss on the receivers where `fedavg`,
+`uniform-donor` or the pooled reference are worse — and only then whether it
+beats `local-only`.
+Secondary questions: does any score's donor ordering track measured `U`? Does
+any arm beat both `local-only` and `uniform-donor`?
 **Also report group recovery:** cluster clients into 2 groups by each symmetric
 score (`rate`, `s`, `S`) and report the Adjusted Rand Index against the true
 group labels. `s` should recover the missingness groups; `rate` should do worse
@@ -483,3 +503,82 @@ privacy · wandb · any abstraction layer "for later extensibility".
 
 A negative result reported clearly is a valid outcome of this round. Do not tune
 toward a win.
+
+## 15. Graph representation (explicit, no learning) — experiment E4
+
+> **Status: specified only. Do not implement or run any of §15 until E1 is
+> done and its report has been reviewed.**
+
+Two additional arms that read the receiver's co-missingness as a **graph**
+rather than as a list of pairs. Both are closed-form NumPy — no learning, no
+new hyperparameters beyond `τ`. They are consistent with §14: nothing here is
+a GNN or a learned encoder.
+
+**E4** runs on the **same setup and the same seeds as E1** (same datasets,
+clients, masks, `θ0`, budgets), with all nine §9 arms plus the two below, so the
+comparison with E1 is exact (the determinism test guarantees the nine E1 arms
+reproduce bit-for-bit).
+
+### 15.1 The receiver's co-missingness graph
+
+From receiver `i`'s training mask (§5): nodes = the **maskable** features;
+an edge `(f,g)` wherever `[C_i]₊[f,g] > τ`, with **`τ = 0.2`**.
+
+*Permutation-threshold variant* (reported alongside, not tuned): shuffle each
+maskable column of the receiver's training mask independently (keeps every
+feature's rate, destroys co-missingness), recompute `[C]₊`, and pool the
+off-diagonal values over `B = 200` shuffles; `τ_perm` = their 95th percentile.
+`B` and the percentile are fixed constants of the variant, not knobs.
+
+Connected components `K_1 … K_m` of this graph. A component with no edge (an
+isolated feature) contributes nothing below.
+
+### 15.2 `component-W_comp`
+
+```
+ω_k           = mean of H_i[f,g] over the edges (f,g) of component K_k
+W_comp(i←j)   = Σ_k ω_k · min_{(f,g) ∈ edges(K_k)} J_j[f,g]  /  Σ_k ω_k
+```
+
+The **`min` is deliberate**: a donor that observes two of a panel's three
+members cannot teach the relationships inside that panel, and pairwise scoring
+(`W_H`, `W_C`) wrongly gives it partial credit. Directed, in [0, 1]. No edge
+anywhere → undefined → size-anchor fallback (as §6), flagged in the report.
+Arm: `q = W_comp(i←j)`, same `α, β, γ` as the other score arms.
+
+### 15.3 `graph-similarity-s_graph`
+
+Weighted adjacency `A = [C]₊` on the edges above `τ` (0 elsewhere); normalised
+Laplacian `L = I − D^{-1/2} A D^{-1/2}` (an isolated node gets a zero row and
+column). Eigenvalues lie in [0, 2]. Take the eigenvalues sorted descending —
+**all `m` of them (`k = m` = number of maskable features), so the eigenvalue
+count is not a new hyperparameter**:
+
+```
+s_graph(i,j) = 1 − ‖λ_i − λ_j‖₂ / (2·√m)          in [0, 1], symmetric
+```
+
+This compares **graph structure** rather than entry-by-entry agreement, so two
+clients that skip different-but-analogous panels can still look similar (where
+`s` in §6 would not). Arm: `q = s_graph(i,j)`.
+
+### 15.4 E4 diagnostic — panel recovery
+
+Per dataset: the Adjusted Rand Index between the receiver's graph components
+(isolated features as singleton clusters) and the **true panel assignment**
+(§3.2), averaged over receivers and seeds, at `τ = 0.2` and at `τ_perm`.
+
+**Prediction, recorded before any §15 code exists:** recovery should be **high
+on wine** (its panels group genuinely correlated features) and **low on
+kin8nm** (median `|corr|` among maskable features 0.024, so its panels are
+arbitrary). No prediction is recorded for concrete or protein.
+
+### 15.5 Out of scope, with acceptance criteria
+
+- **A learned graph encoder remains out of scope** (§14). It may be proposed
+  only if it **beats both `W_comp` and `s_graph` using the same inputs** (the
+  clients' training-mask summaries) **and the same training budget**.
+- **The GRAPE sample–feature backbone is a separate, deferred question.** While
+  missingness representations are being compared, the predictor stays the
+  mask-aware MLP of §1, so any difference between arms comes from the weights,
+  not from the model.

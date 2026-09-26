@@ -16,7 +16,10 @@ would equal timepoint 1; 100 has no larger neighbour for the stability check).
 Headroom - diagnostic only, nothing is chosen from it. Local and pooled
 references are early-stopped on the receiver's validation fold and scored on
 its TEST fold, as §8 defines headroom.
+
+Run:  python pilots.py [--headroom-only]
 """
+import argparse
 import os
 import re
 
@@ -31,13 +34,13 @@ from data.inject import load_or_build_roles
 from data.validate_injector import precondition
 from headroom import format_block
 from loop import ARMS, run_seed
-from model import CLIP_STATS, reset_clip_stats
 
 SEEDS = [11, 23, 37]
 BUDGETS = [0, 10, 25, 50, 100]
 CANDIDATE_BUDGETS = [10, 25, 50]
 COLLAB = [a for a in ARMS if a != "local-only"]
 OUT = "results/pilots"
+NL = "\n"
 
 
 def budget_table(m):
@@ -78,7 +81,22 @@ def freeze_budget(budget, path="configs/defaults.yaml"):
     open(path, "w", encoding="utf-8").write(text)
 
 
+def headroom_table(rows):
+    h = pd.DataFrame(rows)
+    return h.groupby("receiver").agg(
+        n_train=("n_train", "first"), rate=("rate_maskable", "mean"),
+        loss_local=("loss_local", "mean"), loss_pooled=("loss_pooled", "mean"),
+        rel_mean=("rel_headroom", "mean"), rel_min=("rel_headroom", "min"),
+        harm_mean=("pooling_harm", "mean"), n_worse=("pooling_harm", lambda v: int((v > 0).sum())),
+        best_local=("local_best", "mean"), halt_local=("local_halt", "mean"),
+        best_pooled=("pooled_best", "mean"), halt_pooled=("pooled_halt", "mean"),
+        verdicts=("verdict", lambda v: ", ".join(f"{k} x{int(c)}" for k, c in v.value_counts().items())))
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--headroom-only", action="store_true", help="skip the budget pilot")
+    args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     cfg = yaml.safe_load(open("configs/defaults.yaml"))
     cc = cfg["clients"]
@@ -88,7 +106,7 @@ def main():
         print(s, flush=True)
         log.append(s)
 
-    say("=== CLIENT TRAINING SIZES (precondition >= 100 rows)")
+    say(f"=== CLIENT TRAINING SIZES (K={cc['K']}, precondition >= 100 rows)")
     data = {}
     for name in cfg["datasets"]:
         df, _ = load_dataset(name, verbose=False)
@@ -100,41 +118,33 @@ def main():
         if ok:
             data[name] = (df, roles)
 
-    say(f"\nseeds {SEEDS}; receiver_p_rare {cc['receiver_p_rare']} vs group p_rare {cc['p_rare']}")
-    tables, head_rows, clip = {}, {}, {}
+    say(f"{NL}seeds {SEEDS}; receiver_p_rare {cc['receiver_p_rare']} vs group p_rare {cc['p_rare']}")
+    budgets = None if args.headroom_only else BUDGETS
+    tables, head_rows = {}, {}
     for name, (df, roles) in data.items():
-        reset_clip_stats()
-        outs = [run_seed(df, roles, cfg, s, split="val", budgets=BUDGETS) for s in SEEDS]
-        clip[name] = dict(CLIP_STATS)
-        tables[name] = budget_table(pd.DataFrame([r for o in outs for r in o["metrics"]]))
+        outs = [run_seed(df, roles, cfg, s, split="val", budgets=budgets) for s in SEEDS]
+        if not args.headroom_only:
+            tables[name] = budget_table(pd.DataFrame([r for o in outs for r in o["metrics"]]))
         head_rows[name] = [r for o in outs for r in o["headroom"]]
 
-    say("\n=== HEADROOM (test fold; local and pooled both early-stopped on val)")
+    say(f"{NL}=== HEADROOM (test fold; local and pooled both early-stopped on val)")
     for name, rows in head_rows.items():
-        h = pd.DataFrame(rows)
-        per = h.groupby("receiver").agg(
-            n_train=("n_train", "first"), rate=("rate_maskable", "mean"),
-            loss_local=("loss_local", "mean"), loss_pooled=("loss_pooled", "mean"),
-            rel_mean=("rel_headroom", "mean"), rel_min=("rel_headroom", "min"),
-            stop_local=("local_stop", "mean"), stop_pooled=("pooled_stop", "mean"),
-            verdicts=("verdict", lambda v: ", ".join(f"{k.split()[0]} x{int(c)}" for k, c in v.value_counts().items())))
-        say(f"\n{name}\n" + per.to_string(float_format=lambda v: f"{v:.3f}"))
+        say(f"{NL}{name}{NL}" + headroom_table(rows).to_string(float_format=lambda v: f"{v:.3f}"))
         say(format_block(rows))
+    if args.headroom_only:
+        with open(os.path.join(OUT, "pilots_headroom.txt"), "w", encoding="utf-8") as f:
+            f.write(NL.join(log) + NL)
+        return
 
-    say("\n=== ADAPTATION BUDGET (val fold; val RMSE means over seeds x receivers)")
+    say(f"{NL}=== ADAPTATION BUDGET (val fold; val RMSE means over seeds x receivers)")
     for name, t in tables.items():
-        say(f"\n{name}\n" + t.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+        say(f"{NL}{name}{NL}" + t.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     budget, why = choose_budget(tables)
-    say(f"\nCHOSEN adapt_budget = {budget}: {why}")
-
-    say("\n=== +-5 CLIP (observed standardised entries with |z| > 5, all input builds in the run)")
-    for name, c in clip.items():
-        say(f"{name:9s} clipped {c['clipped']} of {c['observed']} observed entries "
-            f"({c['clipped'] / max(c['observed'], 1):.2e}); input builds with any clip: "
-            f"{c['calls_with_clip']} of {c['calls']}")
+    say(f"{NL}CHOSEN adapt_budget = {budget}: {why}")
     freeze_budget(budget)
-    say("\nfrozen adapt_budget in configs/defaults.yaml")
-    open(os.path.join(OUT, "pilots.txt"), "w", encoding="utf-8").write("\n".join(log) + "\n")
+    say(f"{NL}frozen adapt_budget in configs/defaults.yaml")
+    with open(os.path.join(OUT, "pilots.txt"), "w", encoding="utf-8") as f:
+        f.write(NL.join(log) + NL)
 
 
 if __name__ == "__main__":

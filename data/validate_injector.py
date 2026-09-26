@@ -9,6 +9,7 @@ import os
 from contextlib import redirect_stdout
 
 import numpy as np
+import yaml
 
 from data.clients import BORDERLINE_TRAIN, MIN_TRAIN, client_pool, group_profiles, size_check
 from data.design import load_dataset
@@ -78,7 +79,9 @@ def summarise(label, runs):
             f"   [{' '.join(f'{h:.2f}' for h in hist)}] {flag}")
 
 
-K_CLIENTS, SPLIT = 6, (0.6, 0.2, 0.2)
+with open("configs/defaults.yaml") as _f:
+    _CC = yaml.safe_load(_f)["clients"]
+K_CLIENTS, SPLIT = _CC["K"], tuple(_CC["split"])
 
 
 def precondition(roles, flags, train_sizes=None):
@@ -173,7 +176,7 @@ def validate(name, raw_dir, rate, jitter):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--datasets", nargs="+", default=["concrete", "wine", "energy", "kin8nm", "power"])
+    ap.add_argument("--datasets", nargs="+", default=["concrete", "wine", "kin8nm", "protein"])
     ap.add_argument("--raw", default="./raw")
     ap.add_argument("--rate", type=float, default=0.3)
     ap.add_argument("--jitter", type=float, default=0.05)

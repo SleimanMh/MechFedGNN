@@ -54,6 +54,6 @@ def test_client_size_precondition():
 
 
 def test_build_clients_refuses_undersized_clients():
-    df, roles, cfg = _setup(n=1000)                                   # 6 clients x 85 rows
+    df, roles, cfg = _setup(n=700)                                    # 4 clients x 82 rows
     with pytest.raises(ValueError, match="precondition failed"):
         build_clients(df, roles, cfg, 11)

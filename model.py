@@ -14,15 +14,6 @@ from torch import nn
 torch.use_deterministic_algorithms(True)
 torch.set_num_threads(1)
 
-Z_CLIP = 5.0
-CLIP_STATS = {"observed": 0, "clipped": 0, "calls": 0, "calls_with_clip": 0}
-
-
-def reset_clip_stats():
-    for k in CLIP_STATS:
-        CLIP_STATS[k] = 0
-
-
 class MaskMLP(nn.Module):
     def __init__(self, d, hidden=(64, 32)):
         super().__init__()
@@ -53,31 +44,33 @@ def build(params, d, hidden=(64, 32)):
     return model
 
 
+def _robust_centre_scale(x):
+    """Median and IQR of the observed values of one feature. IQR 0 (a value
+    covering > half the rows) falls back to the std; std 0 falls back to 1."""
+    if len(x) == 0:
+        return 0.0, 1.0
+    q25, med, q75 = np.percentile(x, [25, 50, 75])
+    scale = q75 - q25
+    if scale <= 0:
+        scale = x.std()
+    return float(med), float(scale) if scale > 0 else 1.0
+
+
 class Standardiser:
-    """Training-fold statistics of one client: observed-entry mean/std of X, mean/std of y."""
+    """Training-fold statistics of one client. Features: median / IQR over
+    OBSERVED entries, no clipping, so heavy tails are preserved but a single
+    extreme value cannot set the scale. Target: mean / std (the loss is MSE)."""
 
     def __init__(self, X, M, y):
         obs = M.astype(bool)
-        cnt = obs.sum(0)
-        Xo = np.where(obs, X, 0.0)
-        self.mu = np.divide(Xo.sum(0), cnt, out=np.zeros(X.shape[1]), where=cnt > 0)
-        var = np.divide((np.where(obs, X - self.mu, 0.0) ** 2).sum(0), cnt,
-                        out=np.ones(X.shape[1]), where=cnt > 0)
-        self.sd = np.where(var > 0, np.sqrt(var), 1.0)
+        stats = [_robust_centre_scale(X[obs[:, f], f]) for f in range(X.shape[1])]
+        self.mu = np.array([m for m, _ in stats])
+        self.sd = np.array([s for _, s in stats])
         self.y_mu, self.y_sd = float(y.mean()), float(y.std()) or 1.0
         self.y_median = float(np.median(y))
 
     def inputs(self, X, M):
-        # Clip: a shrunk receiver can observe a rarely-ordered feature only 2-3
-        # times, giving a near-zero sd and |z| in the hundreds on other folds.
-        raw = (X - self.mu) / self.sd
-        obs = M.astype(bool)
-        n_clip = int((obs & (np.abs(raw) > Z_CLIP)).sum())
-        CLIP_STATS["observed"] += int(obs.sum())
-        CLIP_STATS["clipped"] += n_clip
-        CLIP_STATS["calls"] += 1
-        CLIP_STATS["calls_with_clip"] += n_clip > 0
-        x = np.where(obs, np.clip(raw, -Z_CLIP, Z_CLIP), 0.0)
+        x = np.where(M.astype(bool), (X - self.mu) / self.sd, 0.0)
         return torch.tensor(np.concatenate([x, M], 1), dtype=torch.float32)
 
     def target(self, y):
@@ -110,9 +103,10 @@ def train(params, d, xin, yt, steps, seed, cfg, checkpoints=(), on_checkpoint=No
 
 
 def train_early_stopping(params, d, xin, yt, xval, yval, seed, cfg, es):
-    """Adam on MSE, validation MSE checked every `es['eval_every']` steps; stop
-    after `es['patience']` checks without improvement or at `es['max_steps']`,
-    and return the best parameters with the step they were reached at."""
+    """Adam on MSE, validation MSE checked every `es['eval_every']` steps. A stop
+    is permitted only from step `es['min_steps']` on, after `es['patience']`
+    checks without improvement; `es['max_steps']` caps the run. Returns the best
+    parameters, the step they were reached at, and the step training halted."""
     model = build(params, d, cfg["hidden"])
     opt = torch.optim.Adam(model.parameters(), lr=cfg["lr"])
     gen = torch.Generator().manual_seed(int(seed))
@@ -123,6 +117,7 @@ def train_early_stopping(params, d, xin, yt, xval, yval, seed, cfg, es):
             return float(((model(xval) - yval) ** 2).mean())
 
     best, best_step, best_params, waited = val_loss(), 0, get_params(model), 0
+    step = 0
     for step in range(1, es["max_steps"] + 1):
         idx = torch.randperm(n, generator=gen)[:bs]
         opt.zero_grad()
@@ -134,9 +129,9 @@ def train_early_stopping(params, d, xin, yt, xval, yval, seed, cfg, es):
                 best, best_step, best_params, waited = v, step, get_params(model), 0
             else:
                 waited += 1
-                if waited >= es["patience"]:
+                if waited >= es["patience"] and step >= es["min_steps"]:
                     break
-    return best_params, best_step
+    return best_params, best_step, step
 
 
 def predict(params, d, xin, st, hidden=(64, 32)):

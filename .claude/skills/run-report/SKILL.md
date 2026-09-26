@@ -65,14 +65,18 @@ per receiver. Disagreement is the interesting case and must be visible.
 
 ## 5. Aggregation and headroom
 
-- The headroom block: `loss_local`, `loss_pooled`, `headroom`, verdict
-  (NO HEADROOM / THIN HEADROOM / HEADROOM OK), per receiver.
+- The headroom block: `loss_local`, `loss_pooled`, `headroom`,
+  `pooling_harm` (= `loss_pooled − loss_local` where positive), the number of
+  receiver-seeds where pooling is worse than local, and the verdict
+  (POOLING HARMS / NO HEADROOM / THIN HEADROOM / HEADROOM OK), per receiver.
+  POOLING HARMS means pooling is worse than local beyond sampling noise.
 - Aggregation settings actually used: alpha, beta, gamma, lambda_pop, mix
   ratio, adaptation budget.
 - Confirm the FedAvg limit unit test passed in this run.
 
 If any receiver reports NO HEADROOM, put that banner at the TOP of section 6 as
-well — results below it are noise around the receiver's own optimum.
+well — results below it are noise around the receiver's own optimum. Likewise
+a POOLING HARMS banner: there the question is whether an arm avoids the harm.
 
 ## 6. Results and ablations
 

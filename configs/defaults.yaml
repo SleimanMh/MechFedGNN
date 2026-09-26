@@ -1,17 +1,17 @@
 # Frozen defaults (CLAUDE.md §1, §4, §7, §8). Pilot-chosen values are marked.
 # Candidates; a dataset runs only if it passes every precondition (validate_injector).
-datasets: [concrete, wine, energy, kin8nm, power]
+datasets: [concrete, wine, kin8nm, protein]
 seeds: [11, 23, 37, 53, 71, 89, 101, 113, 131, 149]
 
 clients:
-  K: 6
+  K: 4                                       # 2 clients per latent group
   G: 2
   p_rare: 0.2
   p_usual: 0.9
   profile_noise: 0.05
   split: [0.6, 0.2, 0.2]
   population: population_homogeneous
-  frac_low: [0.8, 0.2, 0.8, 0.2, 0.8, 0.2]   # stratified only; cross-cuts groups [0,0,0,1,1,1]
+  frac_low: [0.8, 0.2, 0.8, 0.2]             # stratified only; cross-cuts groups [0,0,1,1]
   receiver_p_rare: 0.15                      # receiver orders its group's rare panels at this (group: p_rare)
 
 injection:
@@ -39,5 +39,7 @@ headroom:
   thin_max: 0.10
   early_stopping:      # same protocol for the local and pooled references
     eval_every: 25
-    patience: 20       # checks without improvement (= 500 steps)
+    min_steps: 100     # no stop is permitted before this step
+    patience: 50       # checks without improvement (= 1250 steps)
     max_steps: 5000
+  harm_se: 2.0         # POOLING HARMS if pooled MSE exceeds local by > harm_se paired SEs
