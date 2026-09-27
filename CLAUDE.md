@@ -342,7 +342,7 @@ trained on pooled training rows of all clients, evaluated under the receiver's
 mask — the upper bound for parameter aggregation). **Both references are
 trained under the same protocol** — from `θ0`, receiver's standardisation,
 Adam, early-stopped on the receiver's validation fold (check every 25 steps;
-no stop before step 100; patience 50 checks = 1250 steps; max 5000 steps;
+no stop before step 100; patience 50 checks = 1250 steps; max 5000 steps, 20000 on protein, whose references hit 5000;
 best checkpoint restored) — so headroom measures information, not step count.
 `headroom = loss_local − loss_pooled`. Verdicts, in this order:
 
@@ -384,15 +384,25 @@ every client as receiver in turn, 10 seeds. Each produces a report via the
 **E1 — signal comparison (the main one).**
 `population_homogeneous`, MAR with `driver_overlap = 0.5`, rate 0.3, the latent
 group structure of §4.1. All nine arms.
-**Primary question (revised before E1, on the record):** under group-structured
-missingness, indiscriminate pooling can be *worse* than local training (the
-other group's rows observe exactly what the receiver lacks, and a model fitted
-to that mix transfers poorly to the receiver's mask — seen in the Stage 2
-pilots and the synthetic headroom tests). E1 therefore asks first **whether any
-weighting rule avoids the harm that indiscriminate pooling causes** — does it
-stay at or below `local-only` loss on the receivers where `fedavg`,
-`uniform-donor` or the pooled reference are worse — and only then whether it
-beats `local-only`.
+**Primary question:** does any weighting rule **avoid the harm that
+indiscriminate averaging causes**, on the receivers where `local-only` beats
+`fedavg` and `uniform-donor`? Only then: does it beat `local-only`?
+
+*Correction to the record.* An earlier revision framed this as harm from
+indiscriminate **pooling**, on the strength of negative headroom in the
+synthetic tests and the K = 6 wine pilot. That finding did not survive: with
+both references early-stopped under one protocol, the pooled reference is
+never worse than local beyond sampling noise — **0 of 48 receiver-seeds**
+(POOLING HARMS, §8) across concrete, wine, kin8nm and protein. Pooling (one
+model trained on everyone's rows) and parameter averaging (the arms) are
+different things; the harm Stage 2 did show was at the **arm** level —
+`local-only` beat `fedavg` on kin8nm at every adaptation budget.
+
+E1 must therefore report, **per receiver** (mean over seeds, at both
+timepoints): `local-only − fedavg` and `local-only − uniform-donor` (RMSE;
+negative = the averaging arm is worse, i.e. harms), and for **every arm** how
+many receivers — and receiver-seeds — it harms relative to `local-only`.
+
 Secondary questions: does any score's donor ordering track measured `U`? Does
 any arm beat both `local-only` and `uniform-donor`?
 **Also report group recovery:** cluster clients into 2 groups by each symmetric
@@ -530,8 +540,12 @@ feature's rate, destroys co-missingness), recompute `[C]₊`, and pool the
 off-diagonal values over `B = 200` shuffles; `τ_perm` = their 95th percentile.
 `B` and the percentile are fixed constants of the variant, not knobs.
 
-Connected components `K_1 … K_m` of this graph. A component with no edge (an
-isolated feature) contributes nothing below.
+Connected components `K_1 … K_c` of this graph. **Every** maskable feature
+belongs to exactly one component; an isolated feature is a **single-feature
+component** — a legitimate component with an empty edge set, not an error case.
+Single-feature panels are real in this setup (concrete `{f2}`, protein `{f6}`),
+and a feature can also end up isolated because its co-missingness falls below
+`τ` in this receiver's mask.
 
 ### 15.2 `component-W_comp`
 
@@ -542,8 +556,23 @@ W_comp(i←j)   = Σ_k ω_k · min_{(f,g) ∈ edges(K_k)} J_j[f,g]  /  Σ_k ω_k
 
 The **`min` is deliberate**: a donor that observes two of a panel's three
 members cannot teach the relationships inside that panel, and pairwise scoring
-(`W_H`, `W_C`) wrongly gives it partial credit. Directed, in [0, 1]. No edge
-anywhere → undefined → size-anchor fallback (as §6), flagged in the report.
+(`W_H`, `W_C`) wrongly gives it partial credit. Directed, in [0, 1].
+
+**Single-feature components are handled by the formula, not special-cased:**
+a component with no edges has no pairs, so there is no joint gap to weight and
+no pair for a donor to cover. Its `ω_k` is defined as **0** (the empty sum of
+`H` over no edges), so it adds 0 to both numerator and denominator —
+it **contributes nothing**, by construction, and the `min` is never taken over
+an empty set because `ω_k = 0` terms are dropped before it. Consequences to
+report, not hide:
+
+- A receiver whose group skips a single-feature panel (group B on concrete and
+  protein) gets **no W_comp credit for that panel at all**; `W_comp` then
+  scores donors only on the multi-feature components present in its mask.
+- If **every** component is single-feature (no edge anywhere), the sum is
+  empty → `W_comp` undefined → size-anchor fallback (as §6), flagged in the
+  report with the receiver and seed.
+
 Arm: `q = W_comp(i←j)`, same `α, β, γ` as the other score arms.
 
 ### 15.3 `graph-similarity-s_graph`
@@ -568,10 +597,24 @@ Per dataset: the Adjusted Rand Index between the receiver's graph components
 (isolated features as singleton clusters) and the **true panel assignment**
 (§3.2), averaged over receivers and seeds, at `τ = 0.2` and at `τ_perm`.
 
-**Prediction, recorded before any §15 code exists:** recovery should be **high
-on wine** (its panels group genuinely correlated features) and **low on
-kin8nm** (median `|corr|` among maskable features 0.024, so its panels are
-arbitrary). No prediction is recorded for concrete or protein.
+**Predictions, both recorded before any §15 code exists:**
+
+- **Operative (Claude's):** panel recovery should be **high on every dataset,
+  kin8nm included**. The graph is built from the *mask*, and the injector
+  installs panel structure by panel membership regardless of feature
+  correlation (within-panel φ ≈ 0.83 on every dataset, kin8nm too, §3.5).
+- **Superseded and wrong (the user's original):** high on wine, **low on
+  kin8nm** because its panels group nearly uncorrelated features (median
+  `|corr|` 0.024). Kept for the record: it attributes to the graph a property
+  (feature relatedness) that the mask does not carry.
+
+**Consequence:** panel-recovery ARI is a **sanity check on graph construction**,
+not a discriminating result — it should be high everywhere, and a low value
+means a bug or a threshold problem, not a finding. The **discriminating
+question for E4 is whether `W_comp` beats `W_H`**, which should still depend
+on whether panels group genuinely related features: requiring a donor to cover
+a whole component only pays off if the component's members carry information
+jointly (plausible on wine and protein, not on kin8nm).
 
 ### 15.5 Out of scope, with acceptance criteria
 

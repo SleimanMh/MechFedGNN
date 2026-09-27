@@ -43,3 +43,10 @@ headroom:
     patience: 50       # checks without improvement (= 1250 steps)
     max_steps: 5000
   harm_se: 2.0         # POOLING HARMS if pooled MSE exceeds local by > harm_se paired SEs
+
+# Per-dataset overrides, deep-merged by loop.for_dataset(cfg, name).
+dataset_overrides:
+  protein:
+    headroom:
+      early_stopping:
+        max_steps: 20000   # 5000 truncated both references (best step ~4700)

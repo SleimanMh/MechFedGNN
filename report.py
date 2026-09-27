@@ -88,6 +88,37 @@ def fedavg_limit_ok():
     return bool(np.allclose(out, sum(pk * t for pk, t in zip(p, th)), atol=1e-8, rtol=0))
 
 
+def averaging_harm(m):
+    """E1 primary question (CLAUDE.md §10): harm from indiscriminate averaging.
+    Per receiver: local-only - fedavg and local-only - uniform-donor (RMSE;
+    negative = the averaging arm is worse). Per arm: receivers and
+    receiver-seeds it harms relative to local-only."""
+    r = m[m.metric == "rmse"]
+    L = ["**Harm from averaging, per receiver** (RMSE, mean over seeds; negative = worse than local-only)", ""]
+    rows = []
+    for rec, g in r.groupby("receiver"):
+        row = {"receiver": rec}
+        for tp in ["t1", "t2"]:
+            at = g[g.timepoint == tp].groupby("arm")["value"].mean()
+            row[f"local-fedavg {tp}"] = at["local-only"] - at["fedavg"]
+            row[f"local-uniform {tp}"] = at["local-only"] - at["uniform-donor"]
+        rows.append(row)
+    L += [pd.DataFrame(rows).round(4).pipe(_md, index=False), ""]
+    counts = []
+    for arm in [a for a in ARMS if a != "local-only"]:
+        row = {"arm": arm}
+        for tp in ["t1", "t2"]:
+            g = r[r.timepoint == tp].pivot_table(index=["seed", "receiver"], columns="arm", values="value")
+            harmed = g[arm] > g["local-only"]
+            per_rec = g.groupby(level="receiver").mean()
+            row[f"receivers harmed {tp}"] = f"{int((per_rec[arm] > per_rec['local-only']).sum())}/{len(per_rec)}"
+            row[f"receiver-seeds harmed {tp}"] = f"{int(harmed.sum())}/{len(harmed)}"
+        counts.append(row)
+    L += ["**Receivers harmed relative to local-only, per arm**", "",
+          pd.DataFrame(counts).pipe(_md, index=False), ""]
+    return L
+
+
 def build_report(cfg, name, df, roles, dropped, outs):
     m, s, w, h = frames(outs)
     feats, inj, cc, ac, mc = roles["features"], cfg["injection"], cfg["clients"], cfg["aggregation"], cfg["model"]
@@ -203,6 +234,7 @@ def build_report(cfg, name, df, roles, dropped, outs):
     per["mean"], per["worst"] = r2.mean(1), r2.max(1)
     per["frac_harmed"] = (delta > 0).mean(1)
     L += ["**Per-receiver RMSE, timepoint 2** (mean over seeds)", "", per.loc[ARMS].round(4).pipe(_md), ""]
+    L += averaging_harm(m)
     u = s[s.score == "W_H"].groupby(["receiver", "donor"])[["U_t1", "U_t2"]].mean()
     L += ["**Measured transfer benefit U[i<-j]** (RMSE reduction vs local-only; mean over seeds)", "",
           u.round(4).pipe(_md), ""]

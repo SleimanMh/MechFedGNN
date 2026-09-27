@@ -7,6 +7,8 @@ asymmetry, §4.4), and each arm aggregates, is evaluated
 (timepoint 1 = budget 0), adapted on the receiver's training rows and evaluated
 again (timepoint 2). local-only gets the same total step count.
 """
+import copy
+
 import numpy as np
 
 from data.clients import asymmetric_receiver, build_clients
@@ -20,6 +22,15 @@ ARMS = ["local-only", "fedavg", "uniform-donor", "marginal-rate", "missingness-s
         "coverage-W_H", "coverage-W_C", "population-S", "combined-Q"]
 SCORE_OF_ARM = {"marginal-rate": "rate", "missingness-similarity": "s", "coverage-W_H": "W_H",
                 "coverage-W_C": "W_C", "population-S": "S", "combined-Q": "Q"}
+
+
+def for_dataset(cfg, name):
+    """Copy of cfg with cfg['dataset_overrides'][name] deep-merged in."""
+    def merge(base, over):
+        for k, v in over.items():
+            base[k] = merge(base.get(k, {}), v) if isinstance(v, dict) else v
+        return base
+    return merge(copy.deepcopy(cfg), (cfg.get("dataset_overrides") or {}).get(name, {}))
 
 
 def _seed(*parts):

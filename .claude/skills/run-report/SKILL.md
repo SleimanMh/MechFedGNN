@@ -106,6 +106,10 @@ Then:
 
 - Per-receiver table for the primary metric: mean, worst client, and the
   fraction of clients harmed relative to local-only.
+- Harm from averaging, per receiver, at both timepoints: `local-only − fedavg`
+  and `local-only − uniform-donor` (negative = the averaging arm is worse).
+  Then, for every arm, how many receivers and receiver-seeds it harms relative
+  to local-only. (E1's primary question — CLAUDE.md §10.)
 - Measured transfer benefit `U[i<-j]` per receiver-donor pair, at timepoint 1
   (immediately after mixing) and timepoint 2 (after the equal adaptation
   budget).

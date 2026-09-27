@@ -42,7 +42,7 @@ def fetch(name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="./raw")
-    ap.add_argument("--datasets", nargs="+", default=["concrete", "wine", "energy", "kin8nm", "power"], choices=ALL)
+    ap.add_argument("--datasets", nargs="+", default=["concrete", "wine", "kin8nm", "protein"], choices=ALL)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     for name in args.datasets:

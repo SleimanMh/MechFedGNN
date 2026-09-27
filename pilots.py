@@ -33,7 +33,7 @@ from data.design import load_dataset
 from data.inject import load_or_build_roles
 from data.validate_injector import precondition
 from headroom import format_block
-from loop import ARMS, run_seed
+from loop import ARMS, for_dataset, run_seed
 
 SEEDS = [11, 23, 37]
 BUDGETS = [0, 10, 25, 50, 100]
@@ -122,7 +122,8 @@ def main():
     budgets = None if args.headroom_only else BUDGETS
     tables, head_rows = {}, {}
     for name, (df, roles) in data.items():
-        outs = [run_seed(df, roles, cfg, s, split="val", budgets=budgets) for s in SEEDS]
+        cfg_d = for_dataset(cfg, name)
+        outs = [run_seed(df, roles, cfg_d, s, split="val", budgets=budgets) for s in SEEDS]
         if not args.headroom_only:
             tables[name] = budget_table(pd.DataFrame([r for o in outs for r in o["metrics"]]))
         head_rows[name] = [r for o in outs for r in o["headroom"]]
