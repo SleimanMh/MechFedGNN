@@ -17,7 +17,7 @@ Headroom - diagnostic only, nothing is chosen from it. Local and pooled
 references are early-stopped on the receiver's validation fold and scored on
 its TEST fold, as §8 defines headroom.
 
-Run:  python pilots.py [--headroom-only]
+Run:  python pilots.py [--headroom-only | --power]
 """
 import argparse
 import os
@@ -34,6 +34,7 @@ from data.inject import load_or_build_roles
 from data.validate_injector import precondition
 from headroom import format_block
 from loop import ARMS, for_dataset, run_seed
+from stats import DELTA_PCT, power_table
 
 SEEDS = [11, 23, 37]
 BUDGETS = [0, 10, 25, 50, 100]
@@ -96,6 +97,8 @@ def headroom_table(rows):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--headroom-only", action="store_true", help="skip the budget pilot")
+    ap.add_argument("--power", action="store_true",
+                    help="§8.1: seed-level SD of paired contrasts at the frozen budget -> resolvability")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     cfg = yaml.safe_load(open("configs/defaults.yaml"))
@@ -119,14 +122,30 @@ def main():
             data[name] = (df, roles)
 
     say(f"{NL}seeds {SEEDS}; receiver_p_rare {cc['receiver_p_rare']} vs group p_rare {cc['p_rare']}")
-    budgets = None if args.headroom_only else BUDGETS
-    tables, head_rows = {}, {}
+    budgets = None if (args.headroom_only or args.power) else BUDGETS
+    tables, head_rows, power = {}, {}, {}
     for name, (df, roles) in data.items():
         cfg_d = for_dataset(cfg, name)
-        outs = [run_seed(df, roles, cfg_d, s, split="val", budgets=budgets) for s in SEEDS]
-        if not args.headroom_only:
-            tables[name] = budget_table(pd.DataFrame([r for o in outs for r in o["metrics"]]))
+        outs = [run_seed(df, roles, cfg_d, s, folds=("val",), budgets=budgets,
+                         headroom=not args.power) for s in SEEDS]
+        m = pd.DataFrame([r for o in outs for r in o["metrics"]])
+        if args.power:
+            power[name] = power_table(m, n_study=len(cfg["seeds"]))
+        elif not args.headroom_only:
+            tables[name] = budget_table(m)
         head_rows[name] = [r for o in outs for r in o["headroom"]]
+
+    if args.power:
+        n = len(cfg["seeds"])
+        say(f"{NL}=== POWER (§8.1): pilot seeds {SEEDS}, val fold, t2, adapt_budget "
+            f"{cfg['model']['adapt_budget']}; predicted 95% half-width at {n} seeds; "
+            f"resolvable if hw <= delta/2 = {DELTA_PCT / 2}% (delta = {DELTA_PCT}% relative RMSE)")
+        for name, t in power.items():
+            say(f"{NL}{name}  ({int(t['resolvable'].sum())}/{len(t)} contrasts resolvable){NL}"
+                + t.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
+        with open(os.path.join(OUT, "pilots_power.txt"), "w", encoding="utf-8") as f:
+            f.write(NL.join(log) + NL)
+        return
 
     say(f"{NL}=== HEADROOM (test fold; local and pooled both early-stopped on val)")
     for name, rows in head_rows.items():

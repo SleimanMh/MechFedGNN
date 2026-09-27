@@ -33,7 +33,7 @@ def _cfg(**over):
 
 
 def _verdicts(df, cfg, seed=11):
-    rows = run_seed(df, build_roles(df), cfg, seed, split="val")["headroom"]
+    rows = run_seed(df, build_roles(df), cfg, seed, folds=("val",))["headroom"]
     return [r["verdict"] for r in rows], [r["rel_headroom"] for r in rows]
 
 
@@ -63,9 +63,9 @@ def test_determinism_same_seed_identical_csvs(tmp_path):
     cfg = _cfg(**{"model.local_steps": 40, "model.adapt_budget": 5})
     roles = build_roles(df)
     for run in ["a", "b"]:
-        write_csvs(tmp_path / run, [run_seed(df, roles, copy.deepcopy(cfg), 11, split="val")])
+        write_csvs(tmp_path / run, [run_seed(df, roles, copy.deepcopy(cfg), 11, folds=("val",))])
     for f in ["metrics.csv", "scores.csv"]:
         assert (tmp_path / "a" / f).read_bytes() == (tmp_path / "b" / f).read_bytes()
     other = tmp_path / "c"
-    write_csvs(other, [run_seed(df, roles, copy.deepcopy(cfg), 23, split="val")])
+    write_csvs(other, [run_seed(df, roles, copy.deepcopy(cfg), 23, folds=("val",))])
     assert (other / "metrics.csv").read_bytes() != (tmp_path / "a" / "metrics.csv").read_bytes()

@@ -74,9 +74,12 @@ per receiver. Disagreement is the interesting case and must be visible.
   ratio, adaptation budget.
 - Confirm the FedAvg limit unit test passed in this run.
 
-If any receiver reports NO HEADROOM, put that banner at the TOP of section 6 as
-well — results below it are noise around the receiver's own optimum. Likewise
-a POOLING HARMS banner: there the question is whether an arm avoids the harm.
+Headroom is a reference, not a gate: never drop or suppress a receiver or
+dataset because of it. If any receiver reports NO HEADROOM, put a context note
+at the TOP of section 6: the pooled reference did not improve on local there,
+so differences between arms there are expected to be small or unstable under
+this configuration — a subset-weighted arm may still differ. Likewise a
+POOLING HARMS note: there the question is whether an arm avoids the harm.
 
 ## 6. Results and ablations
 
@@ -126,7 +129,7 @@ it:
 | An arm beats local-only and uniform-donor | Its weighting is doing real work |
 | An arm beats local-only but not uniform-donor | The gain is from collaborating at all, not from the weights |
 | Gains at timepoint 1 but not timepoint 2 | The benefit may be limited to initialisation |
-| NO HEADROOM verdict | No aggregation rule could have improved on local training here |
+| NO HEADROOM verdict | The pooled reference did not beat local here; a subset-weighted rule still might — read it beside the arm results |
 
 ## Machine-readable companion
 

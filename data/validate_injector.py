@@ -13,7 +13,7 @@ import yaml
 
 from data.clients import BORDERLINE_TRAIN, MIN_TRAIN, client_pool, group_profiles, size_check
 from data.design import load_dataset
-from data.inject import inject, load_or_build_roles, panel_probs_for_rate
+from data.inject import expected_feature_rates, inject, load_or_build_roles, panel_probs_for_rate
 
 SEEDS = [11, 23, 37, 53, 71, 89, 101, 113, 131, 149]
 SWEEP = [0.0, 0.25, 0.5, 0.75, 1.0]
@@ -73,7 +73,7 @@ def summarise(label, runs):
     f = lambda k: np.nanmean([r[k] for r in runs])
     hist = np.mean([r["panels_hist"] for r in runs], 0)
     extreme = hist[0] + hist[-1]
-    flag = "UNREALISTIC" if extreme > 0.9 else "ok"
+    flag = "ALL-OR-NOTHING" if extreme > 0.9 else "ok"
     return flag, (f"{label:26s} {f('rate_maskable'):6.3f} {f('rate_all'):6.3f} "
             f"{f('within'):7.3f} {f('cross'):7.3f} {f('lift_mean'):6.2f} {f('lift_max'):6.2f}"
             f"   [{' '.join(f'{h:.2f}' for h in hist)}] {flag}")
@@ -84,13 +84,43 @@ with open("configs/defaults.yaml") as _f:
 K_CLIENTS, SPLIT = _CC["K"], tuple(_CC["split"])
 
 
+CONDITIONS = [("(a) independent cell masking", "cell", {}),
+              ("(b) independent panel masking", "mcar", {}),
+              ("(c) coupled panel masking", "mar", {"driver_overlap": 0.5})]
+
+
+def masking_conditions(X, y, roles, rate, jitter, feats):
+    """CLAUDE.md §3.6: the three conditions, rate-matched in expectation.
+    Prints per feature: expected rate, realised mean / min-max over seeds, and
+    the first seed's raw missing count; plus within- and cross-panel phi."""
+    p = panel_probs_for_rate(len(roles["panels"]), rate, jitter)
+    exp = expected_feature_rates(roles, p, jitter)
+    n = len(X)
+    print("\nMASKING CONDITIONS (§3.6)  expected rate = 1 - p(1 - jitter); realised over "
+          f"{len(SEEDS)} seeds; raw count = seed {SEEDS[0]}, n = {n}")
+    for label, mech, kw in CONDITIONS:
+        runs, masks = [], []
+        for s in SEEDS:
+            M, _ = inject(X, y, roles, p, mech, np.random.default_rng(s), jitter=jitter,
+                          driver_seed=s, **kw)
+            masks.append(M)
+            runs.append(diagnose(M, roles))
+        real = np.array([1 - M.mean(0) for M in masks])
+        print(f"  {label:32s} within phi {np.nanmean([r['within'] for r in runs]):+.3f}  "
+              f"cross phi {np.nanmean([r['cross'] for r in runs]):+.3f}")
+        for f in roles["maskable"]:
+            print(f"    {feats[f]:5s} expected {exp[f]:.4f}  realised mean {real[:, f].mean():.4f} "
+                  f"[{real[:, f].min():.4f}, {real[:, f].max():.4f}]  "
+                  f"raw {int((masks[0][:, f] == 0).sum())}/{n}")
+
+
 def precondition(roles, flags, train_sizes=None):
     """A dataset is usable only if: its maskable features are not near-collinear;
-    no mechanism produces an all-or-nothing (unrealistic) panel pattern; it has
+    no mechanism produces an all-or-nothing panel pattern; it has
     at least 2 panels (else both latent groups get the same profile, §4.1); and
     every client trains on >= MIN_TRAIN rows."""
     med = roles["panel_corr_median"]
-    bad = [label for label, f in flags.items() if f == "UNREALISTIC"]
+    bad = [label for label, f in flags.items() if f == "ALL-OR-NOTHING"]
     reasons = []
     if len(roles["panels"]) < 2:
         reasons.append(f"only {len(roles['panels'])} panel(s): no latent group structure possible")
@@ -99,7 +129,7 @@ def precondition(roles, flags, train_sizes=None):
     if med > MAX_MASKABLE_CORR:
         reasons.append(f"median |corr| among maskable {med:.3f} > {MAX_MASKABLE_CORR}")
     if bad:
-        reasons.append(f"UNREALISTIC under {bad}")
+        reasons.append(f"ALL-OR-NOTHING under {bad}")
     return not reasons, reasons
 
 
@@ -124,7 +154,7 @@ def validate(name, raw_dir, rate, jitter):
     print(f"  (third-member threshold = median |corr| among maskable = {roles['panel_corr_median']})")
 
     print("\nconfig                     rate_m rate_a  within   cross  liftmn  liftmax   missing-panels/row [0 1 2 ...]")
-    configs = [("mcar", {})]
+    configs = [("cell", {}), ("mcar", {})]
     configs += [(f"mar o={o}", {"driver_overlap": o}) for o in SWEEP]
     configs += [("fd_mnar top", {"direction": "top"}), ("fd_mnar bottom", {"direction": "bottom"})]
     configs += [(f"cd_mnar s={s}", {"class_spread": s}) for s in SWEEP]
@@ -139,6 +169,8 @@ def validate(name, raw_dir, rate, jitter):
     for label in ["mcar", "mar o=0.5", "fd_mnar top", "cd_mnar s=0.5"]:
         r = np.mean([x["r"] for x in res[label]], 0)
         print(f"  {label:14s}", " ".join(f"{feats[i]}={r[i]:.3f}" for i in roles["maskable"]))
+
+    masking_conditions(X, y, roles, rate, jitter, feats)
 
     verdicts = []
     # Null: MCAR cross-panel phi within 3 SE of 0, SE = sqrt((1-p^2)/(n p^2)), p = observed rate.
@@ -167,7 +199,7 @@ def validate(name, raw_dir, rate, jitter):
                     + ("  WARNING: borderline" if status == "WARN" else ""))
     ok, reasons = precondition(roles, flags, sizes)
     verdicts.append(f"PRECONDITION (median maskable |corr| {roles['panel_corr_median']:.3f} <= "
-                    f"{MAX_MASKABLE_CORR}, no UNREALISTIC mechanism, >= 2 panels, "
+                    f"{MAX_MASKABLE_CORR}, no ALL-OR-NOTHING mechanism, >= 2 panels, "
                     f">= {MIN_TRAIN} training rows per client): "
                     + ("ACCEPT" if ok else "REJECT - " + "; ".join(reasons)))
     print("\n" + "\n".join(verdicts))

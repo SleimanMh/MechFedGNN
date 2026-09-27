@@ -1,11 +1,15 @@
 """Headroom diagnostic (CLAUDE.md §8). Evaluation only - never an arm, never a weight source.
 
 headroom = loss_local - loss_pooled on the receiver's TEST fold under its own
-mask. Both reference models are trained under the SAME protocol - from theta_0,
-early-stopped on the receiver's validation fold, receiver's standardisation -
-so the gap measures information in the pooled rows, not step count:
+mask. Both reference models use the SAME stopping rule - from theta_0,
+early-stopped on the receiver's validation fold, receiver's standardisation.
+Identical stopping criteria are not equal compute: steps and examples processed
+are returned and reported separately.
   local  : the receiver's own training rows
-  pooled : the training rows of all clients (upper bound for aggregation)
+  pooled : the training rows of all clients - one training procedure, NOT an
+           upper bound for personalised aggregation (it cannot weight a subset
+           of donors). Headroom is a reference reported beside results, never a
+           gate on any experiment or dataset.
 
 Downside is reported too: pooling_harm = loss_pooled - loss_local where
 positive. POOLING HARMS is declared only beyond sampling noise, judged on the
@@ -91,6 +95,6 @@ def format_block(rows):
                  f"beyond noise (POOLING HARMS) in {real}/{len(rows)}")
     none = sum(r["verdict"] == "NO HEADROOM" for r in rows)
     if none:
-        lines.insert(0, f"!!! NO HEADROOM for {none} receiver-seed(s): results there are "
-                        "noise around the receiver's own optimum")
+        lines.insert(0, f"context: NO HEADROOM (pooled reference) for {none} receiver-seed(s); "
+                        "arm differences there are expected to be small or unstable")
     return "\n".join(lines)

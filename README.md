@@ -22,7 +22,7 @@ Then open Claude Code in this folder and give it:
 > `data/validate_injector.py` (§3.5) and run validation on all three datasets.
 > Stop and show me the panel assignment per dataset, the within-panel vs
 > cross-panel phi table, the null and dose-response verdicts, and the
-> missing-panels-per-row realism table. Don't build anything else yet.
+> missing-panels-per-row table. Don't build anything else yet.
 
 ## Layout
 

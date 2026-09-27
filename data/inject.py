@@ -15,7 +15,7 @@ from data.design import DESIGN_SEED, decile_edges, design_split
 MAR_SLOPE = 2.0        # b in sigmoid(a + b*z)
 CD_SLOPE = 2.0         # logit shift per unit class_spread at the extreme outcome bin
 CD_BINS = 4
-MECHANISMS = ("mcar", "mar", "fd_mnar", "cd_mnar")
+MECHANISMS = ("cell", "mcar", "mar", "fd_mnar", "cd_mnar")
 
 
 # ---------------------------------------------------------------- roles & panels
@@ -183,9 +183,29 @@ def ordering_probs(X, y, roles, p, mechanism, driver_overlap=0.0, class_spread=0
 
 # ---------------------------------------------------------------- injection
 
+def expected_feature_rates(roles, p, jitter):
+    """Expected missing rate of every feature: 1 - p[P](1 - jitter) for f in P, 0 otherwise.
+    Identical for all mechanisms, so conditions are rate-matched in expectation."""
+    r = np.zeros(len(roles["features"]))
+    for k, P in enumerate(roles["panels"]):
+        r[P] = 1 - p[k] * (1 - jitter)
+    return r
+
+
 def inject(X, y, roles, p, mechanism, rng, jitter=0.05, **kw):
-    """Return (M, ordered): M (n, d) mask, ordered (n, n_panels) bool."""
+    """Return (M, ordered): M (n, d) mask, ordered (n, n_panels) bool.
+
+    mechanism "cell" is the independence control (CLAUDE.md §3.6 (a)): every
+    maskable cell is missing independently at its feature's expected rate, with
+    no panel ordering at all (ordered is None)."""
     n, d = X.shape
+    p = np.asarray(p, float)
+    if mechanism == "cell":
+        rate = expected_feature_rates(roles, p, jitter)
+        M = np.ones((n, d), dtype=np.int8)
+        for f in roles["maskable"]:
+            M[:, f] = rng.random(n) >= rate[f]
+        return M, None
     q = ordering_probs(X, y, roles, p, mechanism, **kw)
     ordered = rng.random(q.shape) < q
     M = np.ones((n, d), dtype=np.int8)

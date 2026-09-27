@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from data.clients import client_profiles, group_profiles
-from data.inject import MECHANISMS, build_roles, inject, panel_probs_for_rate
+from data.inject import MECHANISMS, build_roles, expected_feature_rates, inject, panel_probs_for_rate
 from data.validate_injector import precondition
 from signatures import phi
 from tests.fixtures import synthetic
@@ -77,7 +77,7 @@ def test_driver_overlap_continuous_monotonicity():
 def test_rate_calibration_all_mechanisms():
     X, y, roles = synthetic()
     p = panel_probs_for_rate(2, 0.3, 0.05)
-    kw = {"mcar": {}, "mar": {"driver_overlap": 0.5}, "fd_mnar": {"direction": "top"},
+    kw = {"cell": {}, "mcar": {}, "mar": {"driver_overlap": 0.5}, "fd_mnar": {"direction": "top"},
           "cd_mnar": {"class_spread": 0.5}}
     rates = [1 - inject(X, y, roles, p, m, np.random.default_rng(0), **kw[m])[0][:, roles["maskable"]].mean()
              for m in MECHANISMS]
@@ -118,14 +118,32 @@ def test_constant_columns_never_maskable_or_characteristic():
     assert "f2" not in roles["bin_edges"]
 
 
-def test_precondition_rejects_collinear_unrealistic_single_panel_or_small():
+def test_precondition_rejects_collinear_all_or_nothing_single_panel_or_small():
     good = {"panel_corr_median": 0.3, "panels": [[0], [1]]}
     assert precondition(good, {"mcar": "ok"}, [150] * 6) == (True, [])
     ok, why = precondition({**good, "panel_corr_median": 0.95}, {"mcar": "ok"})
     assert not ok and "0.950 > 0.9" in why[0]
-    ok, why = precondition(good, {"fd_mnar top": "UNREALISTIC"})
+    ok, why = precondition(good, {"fd_mnar top": "ALL-OR-NOTHING"})
     assert not ok and "fd_mnar top" in why[0]
     ok, why = precondition({**good, "panels": [[0, 1]]}, {})
     assert not ok and "no latent group structure" in why[0]
     ok, why = precondition(good, {}, [150, 150, 99])
     assert not ok and "99 < 100" in why[0]
+
+
+def test_cell_masking_is_the_independence_control():
+    """(a) in §3.6: rate-matched to the panel conditions in expectation, no excess
+    association anywhere - but joint absence is NOT zero: it sits at r_f * r_g."""
+    X, y, roles = synthetic(n=20000)
+    p = panel_probs_for_rate(2, 0.3, 0.05)
+    exp = expected_feature_rates(roles, p, 0.05)
+    M, ordered = inject(X, y, roles, p, "cell", np.random.default_rng(0), jitter=0.05)
+    assert ordered is None
+    real = 1 - M.mean(0)
+    np.testing.assert_allclose(real[roles["maskable"]], exp[roles["maskable"]], atol=0.01)
+    within, cross = _within_cross(M, roles)
+    assert abs(within) < 0.03 and abs(cross) < 0.03
+    A = 1 - M[:, 0].astype(float), 1 - M[:, 1].astype(float)
+    assert abs((A[0] * A[1]).mean() - real[0] * real[1]) < 0.01    # ~0.09, not 0
+    Mp, _ = inject(X, y, roles, p, "mcar", np.random.default_rng(0), jitter=0.05)
+    assert _within_cross(Mp, roles)[0] > 0.6                       # (b) keeps within-panel dependence

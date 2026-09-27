@@ -58,12 +58,19 @@ feature/target split matches the GRAPE paper.
 
 ## 3. `data/inject.py` — panel-based missingness
 
-This is the core of the setup and the part that must look **realistic**. Random
-per-cell missingness does not resemble real records. In practice features go
-missing in **panels**: a lab panel is either ordered for a patient or it is not,
-and when it is not, every feature in that panel disappears together. That is
-where genuine co-missingness comes from, and it is exactly what the C matrix is
-meant to detect.
+This is the core of the setup. The masks are **controlled panel-based masks**:
+a synthetic design, not a model of any real dataset — no real dataset has been
+checked against them. The design borrows the lab-panel idea: a panel is either
+ordered for a row or it is not, and when it is not, every feature in that panel
+disappears together.
+
+*What independence does and does not remove.* Independent cell-wise masking
+still produces features going missing together: at rate 0.3 per feature, two
+features are jointly absent with probability 0.3 × 0.3 = **0.09**. What
+independence removes is **excess association** — φ ≈ 0, lift ≈ 1 — not joint
+absence. Panel masking adds association on top of that chance level, and that
+excess is what the C matrix measures. The three masking conditions that separate
+these effects are defined in §3.6.
 
 ### 3.0 Design split (`data/design.py`)
 
@@ -110,9 +117,10 @@ if ordered:      each feature in P is independently missing with prob `jitter`
 ```
 
 `jitter` default **0.05** — occasional single-feature loss inside an ordered
-panel (sample failure, transcription error). It keeps within-panel φ below 1,
-which is what real data looks like; φ = 1.0 exactly is a tell-tale of synthetic
-data.
+panel. Its effect on φ is arithmetic, not a realism claim: with `jitter = 0`
+every panel member has an identical mask column and within-panel φ is exactly
+**1.00**; with `jitter = 0.05` it is **≈ 0.82–0.84** on every dataset here
+(§3.5 validation).
 
 The mechanism decides `q_k(r, P)`:
 
@@ -156,8 +164,11 @@ supposed to isolate mechanism.
 - `class_spread ∈ [0,1]` (CD-MNAR only) — how unequal the per-outcome-bin rates
   are. At 0 it collapses to MCAR.
 
-Both knobs at 0 must return the setup to independent, marginal-equivalent
-missingness. That collapse is the null condition — verify it.
+Both knobs at 0 must return the setup to **independent ordering decisions
+across panels** at the same marginal rates — cross-panel φ ≈ 0. That is the
+null condition for the cross-panel knobs; verify it. It is **not** an
+independence control: within-panel dependence remains by construction at any
+knob setting. The independence control is condition (a) in §3.6.
 
 ### 3.5 Diagnostics the injector must report (`data/validate_injector.py`)
 
@@ -168,9 +179,11 @@ For each configuration, over several seeds:
 - **cross-panel mean φ** — should be ≈ 0 under MCAR and rise with
   `driver_overlap` / `class_spread`
 - lift matrix mean and max
-- a **realism check** table: fraction of rows with 0, 1, 2, … missing panels.
-  If almost every row is either complete or missing everything, the setup is
-  unrealistic — flag it.
+- a **missing-panels-per-row** table: fraction of rows with 0, 1, 2, … missing
+  panels. If almost every row is either complete or missing everything
+  (> 90%), flag it **ALL-OR-NOTHING**: the panels then act as one block and
+  there is no panel structure left for clients to differ in. (This is a
+  structural check, not a realism check.)
 
 Two hard checks, printed with a PASS/FAIL verdict:
 
@@ -182,15 +195,33 @@ Two hard checks, printed with a PASS/FAIL verdict:
 
 **Dataset precondition**, printed as ACCEPT/REJECT: reject a dataset if the
 median `|corr|` among its maskable features (design rows) exceeds **0.9**, or if
-any mechanism is flagged UNREALISTIC, or if it forms **fewer than 2 panels**
+any mechanism is flagged ALL-OR-NOTHING, or if it forms **fewer than 2 panels**
 (both latent groups would get the same profile, §4.1), or if **any client has
 fewer than 100 training rows** (under 120 prints a borderline warning; also
 enforced in `build_clients`). Near-collinear maskable features make panels
 copies of one signal. Rejected so far (at K = 4): naval (median 0.995),
 energy (92 training rows/client), power (d = 4 -> one panel). concrete (88 at
-K = 6) passes at K = 4 with 132.
+K = 6) passes at K = 4 with 132. **Headroom (§8) is not a precondition and
+never excludes a dataset.**
 
 Save the output to `results/injector_validation/<dataset>.txt`.
+
+### 3.6 The three masking conditions
+
+Per-feature missing rates are matched **in expectation** across all three:
+feature `f` in panel `P` is missing with probability `1 − p[P]·(1 − jitter)`.
+
+| Condition | Mechanism | Within-panel association | Cross-panel association |
+|---|---|---|---|
+| **(a) independent cell masking** | `cell`: every maskable cell independently missing at its feature's expected rate | none (φ ≈ 0) | none (φ ≈ 0) |
+| **(b) independent panel masking** | `mcar`: panels ordered independently | yes, by construction | none (φ ≈ 0) |
+| **(c) coupled panel masking** | `mar` with `driver_overlap > 0` (E1: 0.5) | yes | yes, rising with the knob |
+
+(a) is the only **independence control**; (b) is what "cross-panel knob = 0"
+gives, and it still carries within-panel dependence. Validation reports, per
+condition and feature, the **expected** rate (the formula above) and the
+**realised** rates (mean and range over seeds, plus one seed's raw counts):
+expected rates match exactly by construction, realised ones differ by sampling.
 
 ## 4. `data/clients.py` — how clients are constructed
 
@@ -320,6 +351,31 @@ w_j    = base_j^β / Σ_{l≠i} base_l^β
 1e-8:** `α=0, β=1, γ_i=p_i` gives `θ_new = p_i·θ_i + Σ_{j≠i} p_j·θ_j`.
 (Not `γ=0` — with two equal clients that swaps their models.)
 
+### 7.1 Declared fallback when a score cannot distinguish donors
+
+For a score arm and receiver `i`, the score provides **no basis for
+distinguishing donors** when either (i) the score is undefined for **any**
+donor, or (ii) all donors' scores are equal to within `1e-9` (numerical
+equality). In both cases the arm falls back, for that receiver-seed, to the
+**declared fallback: sample-size weighting** (`w_j = p_j / Σ_{l≠i} p_l`, the
+arm's own `γ` kept) and the fallback and its reason are recorded and reported.
+Case (i) replaces mixing scores and sizes in one weight vector, which put two
+different scales side by side. Equal weighting is **a fallback, not a justified
+optimum** — nothing here shows it to be the right weighting when scores tie.
+With equal client sizes (this setup) the fallback weights are numerically
+equal; the distinction matters for the record and for unequal sizes.
+
+*Hypothesis, not established:* when masks carry no usable signal, neither
+coverage nor similarity provides a basis for distinguishing donors, and the
+fallback applies. Two caveats are part of the hypothesis:
+
+- **Identical mask signatures do not imply identical learned relationships,
+  training quality or sample size.** Two donors with the same `r`, `H`, `J`, `C`
+  can hold very different models; every mask-based score is blind to that.
+- **Residual structure is not assigned to similarity alone.** Coverage scores
+  (`W_H`, `W_C`) may also discriminate through residual structure in the mask
+  beyond what similarity captures. Both are measured; neither is presumed.
+
 ## 8. Round protocol (`loop.py`) and headroom (`headroom.py`)
 
 1. One `θ0`; every client copies it.
@@ -336,15 +392,25 @@ Measured transfer benefit, evaluation only, never a weight input:
 U(i←j) = L_i(local reference) − L_i(model incorporating j)
 ```
 
-**Headroom, run before every comparison.** On the receiver's test fold, under
-its own mask: `loss_local` (own training rows only) vs `loss_pooled` (oracle
-trained on pooled training rows of all clients, evaluated under the receiver's
-mask — the upper bound for parameter aggregation). **Both references are
-trained under the same protocol** — from `θ0`, receiver's standardisation,
-Adam, early-stopped on the receiver's validation fold (check every 25 steps;
-no stop before step 100; patience 50 checks = 1250 steps; max 5000 steps, 20000 on protein, whose references hit 5000;
-best checkpoint restored) — so headroom measures information, not step count.
-`headroom = loss_local − loss_pooled`. Verdicts, in this order:
+**Headroom is a reference, not a gate.** It is reported *beside* every results
+table as context. It must **never suppress an experiment or exclude a
+dataset**: a receiver or dataset with thin or no headroom is reported as such
+and serves as a control. The pooled model is one particular training
+procedure, not an upper bound for personalised aggregation: a model that
+weights a subset of donors can beat `local-only` even where indiscriminate
+pooling does not, and pooling cannot represent "weight two donors highly and
+two at zero" at all.
+
+On the receiver's test fold, under its own mask: `loss_local` (own training
+rows only) vs `loss_pooled` (one model trained on the pooled training rows of
+all clients, evaluated under the receiver's mask). Both references use the
+**same stopping rule** — from `θ0`, receiver's standardisation, Adam,
+early-stopped on the receiver's validation fold (check every 25 steps; no stop
+before step 100; patience 50 checks = 1250 steps; max 5000 steps, 20000 on
+protein, whose references hit 5000; best checkpoint restored). **Identical
+stopping criteria do not mean equal compute**: the pooled reference sees more
+rows per epoch and usually runs longer, so compute is recorded separately
+(below). `headroom = loss_local − loss_pooled`. Verdicts, in this order:
 
 - **POOLING HARMS** — pooled is worse than local *beyond sampling noise*:
   on the receiver's test rows, `d_r = e²_pooled,r − e²_local,r`, and
@@ -355,8 +421,62 @@ best checkpoint restored) — so headroom measures information, not step count.
 
 Also report the downside explicitly: `pooling_harm = loss_pooled − loss_local`
 where positive (0 otherwise), and the number of receiver-seeds in which pooling
-is worse than local. Print above every results table. Pooling is a diagnostic
-only — never an arm, never a weight source.
+is worse than local. Pooling is a diagnostic only — never an arm, never a
+weight source.
+
+**Companion diagnostics**, reported beside headroom because the pooled
+reference alone cannot show what subset weighting could achieve:
+
+- **Individual donor candidates vs `local-only`** — for every donor `j`, the
+  pairwise mix `γ·θ_i + (1 − γ)·θ_j`, adapted with the same budget; its test
+  loss minus `local-only` is `U(i←j)` (§8 above), at both timepoints.
+- **Validation-selected candidate, evaluated on test** — among `local-only`
+  and the single-donor candidates, pick the one with the lowest *validation*
+  RMSE (timepoint 2) per receiver-seed, and report its *test* RMSE against
+  `local-only` and `fedavg`. Selection never sees test.
+- **Score-based aggregation vs FedAvg** — every score arm's paired relative
+  difference against `fedavg`, with the §8.1 uncertainty.
+
+**Compute accounting**, recorded per model and reported per arm: optimiser
+steps, **examples processed** (`steps × min(batch, n_train)`), and wall-clock
+seconds — for local training, each arm's adaptation, the single-donor
+candidates, and both headroom references. An arm's examples include the local
+training of every client whose parameters it mixes.
+
+### 8.1 Uncertainty and the meaningful-effect threshold (fixed before E1)
+
+- **Effect unit: relative error, in percent of the comparator's RMSE.** For an
+  arm `a` against comparator `c`, per receiver-seed:
+  `Δ% = 100 · (RMSE_a − RMSE_c) / RMSE_c`. Negative = `a` is better.
+  (Percent of the comparator's error — **not** percentage points of anything.)
+- **Dependence.** Receivers in the same seed share data, donors and `θ0`, so
+  they are not independent. The unit of replication is the **seed**: average
+  `Δ%` over receivers within a seed, then take the mean and a 95 %
+  t-interval over the seed means (df = seeds − 1). Datasets (scenarios) are
+  never pooled; each gets its own interval. Per-receiver effects are reported
+  descriptively beside it.
+- **Meaningful-effect threshold `δ = 2 %`** relative RMSE, fixed here before
+  any E1 output exists. It is the same 2 % already used for NO HEADROOM (§8),
+  chosen before any pilot result.
+- **Decision rule, per contrast and dataset:** *meaningful* if the whole 95 %
+  interval lies beyond `±δ` in one direction; *negligible* if it lies inside
+  `(−δ, +δ)`; otherwise *unresolved*. No contrast is called noise because of a
+  gap under 1 % or because rankings change between budgets — only the interval
+  decides.
+- **Can a bounded study resolve `δ`?** From the pilot seeds (validation fold),
+  estimate the SD of seed-level `Δ%` per contrast and dataset, and predict the
+  interval half-width at the study's seed count:
+  `hw = t(0.975, n−1) · SD / √n`. The study can resolve `δ` for a contrast if
+  `hw ≤ δ/2` (then a true zero lands inside `±δ` and a true effect of `1.5·δ`
+  or more lands outside). Contrasts that fail this are reported as
+  underpowered, not dropped.
+- **Pilot result, recorded before E1** (`python pilots.py --power`; seeds 11,
+  23, 37, validation fold, t2, `adapt_budget = 10`; 21 contrasts per dataset):
+  at 10 seeds the predicted half-width is within `δ/2` for **21/21 on wine,
+  kin8nm and protein** and **13/21 on concrete** — concrete's contrasts
+  against `local-only` (SD 1.7–2.4 % across seeds) are underpowered at this
+  study size. A seed-level SD estimated from 3 seeds is itself rough; the
+  E1 intervals, not this prediction, are what count.
 
 ## 9. Arms (fixed list, always all of them)
 
@@ -405,6 +525,13 @@ many receivers — and receiver-seeds — it harms relative to `local-only`.
 
 Secondary questions: does any score's donor ordering track measured `U`? Does
 any arm beat both `local-only` and `uniform-donor`?
+
+**Run protocol (`run_e1.py`).** Every dataset passing §3.5 runs — concrete,
+wine, kin8nm, protein — with **none excluded for thin or absent headroom**;
+thin-headroom datasets are reported as thin and serve as controls. 10 seeds,
+every client as receiver, all nine arms, validation and test folds (validation
+only for the selected-candidate diagnostic). Effects are judged by §8.1 against
+`δ = 2 %`. The graph extensions (§15) stay deferred.
 **Also report group recovery:** cluster clients into 2 groups by each symmetric
 score (`rate`, `s`, `S`) and report the Adjusted Rand Index against the true
 group labels. `s` should recover the missingness groups; `rate` should do worse
@@ -456,7 +583,7 @@ housing / wine, write `inject.py` and `validate_injector.py`, run validation on
 each dataset.
 **STOP** — show: the panel assignment per dataset, the within-panel vs
 cross-panel φ table, the null and dose-response verdicts, and the
-missing-panels-per-row realism table.
+missing-panels-per-row table.
 
 **Stage 1 — quantities and scores.** Write the §13 tests first (they fail), then
 `signatures.py`, `scores.py`, `kernel.py` until green.
@@ -551,27 +678,50 @@ and a feature can also end up isolated because its co-missingness falls below
 
 ```
 ω_k           = mean of H_i[f,g] over the edges (f,g) of component K_k
-W_comp(i←j)   = Σ_k ω_k · min_{(f,g) ∈ edges(K_k)} J_j[f,g]  /  Σ_k ω_k
+A_j(K_k)      = P( M_f = 1 for every f ∈ K_k )      measured directly on donor j's training mask
+W_comp(i←j)   = Σ_k ω_k · A_j(K_k)  /  Σ_k ω_k
 ```
 
-The **`min` is deliberate**: a donor that observes two of a panel's three
-members cannot teach the relationships inside that panel, and pairwise scoring
-(`W_H`, `W_C`) wrongly gives it partial credit. Directed, in [0, 1].
+**Why whole-component availability, stated narrowly.** A donor that observes
+two of a panel's three members *can* teach the relationship within that
+observed pair, so the earlier claim that it "cannot teach the relationships
+inside the panel" was too strong. The argument that survives is narrower:
+**`P(M_a = M_b = M_c = 1)` is not in general recoverable from the pairwise
+`J`** — pairwise joint observation only bounds it (`A ≤ min J`, with equality
+only in special cases). How often a donor sees a *whole* component at once is
+therefore genuinely higher-order information, and `W_comp` is only worth
+having if it uses it.
+
+**Correction (B5).** The earlier specification scored donors by
+`min_{(f,g) ∈ edges(K_k)} J_j[f,g]`, which **derives availability from pairwise
+`J`**. That is a re-reading of pairwise information, not higher-order, and it
+overstates availability (it is the upper bound above). The definition above
+replaces it: `A_j(K)` is measured directly from donor `j`'s mask, which needs
+one new donor summary — the frequency table of observation patterns over the
+maskable features (at most `2^m` counts; `m ≤ 7` here). The receiver-side
+weight `ω_k` stays pairwise: it weights how often the receiver's gaps co-occur
+and makes no higher-order claim.
+
+**Where this can and cannot differ from pairwise scoring:** for a two-feature
+component `A_j(K) = J_j[f,g]` exactly, so `W_comp` adds higher-order
+information **only on components of three or more features**. Here that is
+concrete `{f1,f5,f6}`, wine `{f0,f7,f8}`, protein `{f0,f4,f7}` — and **none on
+kin8nm**, whose panels are both pairs. On kin8nm `W_comp` is a
+component-weighted pairwise score by construction.
 
 **Single-feature components are handled by the formula, not special-cased:**
-a component with no edges has no pairs, so there is no joint gap to weight and
-no pair for a donor to cover. Its `ω_k` is defined as **0** (the empty sum of
-`H` over no edges), so it adds 0 to both numerator and denominator —
-it **contributes nothing**, by construction, and the `min` is never taken over
-an empty set because `ω_k = 0` terms are dropped before it. Consequences to
-report, not hide:
+a component with no edges has no pairs, so the receiver has no joint gap there
+to weight. Its `ω_k` is defined as **0** (the empty sum of `H` over no edges),
+so it adds 0 to both numerator and denominator — it **contributes nothing**, by
+construction (`A_j` of a single feature is just its observation rate, and is
+never used). Consequences to report, not hide:
 
 - A receiver whose group skips a single-feature panel (group B on concrete and
   protein) gets **no W_comp credit for that panel at all**; `W_comp` then
   scores donors only on the multi-feature components present in its mask.
 - If **every** component is single-feature (no edge anywhere), the sum is
-  empty → `W_comp` undefined → size-anchor fallback (as §6), flagged in the
-  report with the receiver and seed.
+  empty → `W_comp` undefined → the §7.1 declared fallback (sample-size
+  weighting), flagged in the report with the receiver and seed.
 
 Arm: `q = W_comp(i←j)`, same `α, β, γ` as the other score arms.
 
@@ -590,6 +740,16 @@ s_graph(i,j) = 1 − ‖λ_i − λ_j‖₂ / (2·√m)          in [0, 1], symm
 This compares **graph structure** rather than entry-by-entry agreement, so two
 clients that skip different-but-analogous panels can still look similar (where
 `s` in §6 would not). Arm: `q = s_graph(i,j)`.
+
+**⚠️ Open decision — raw spectra discard feature identity.** The Laplacian
+spectrum is invariant to relabelling the nodes, so two clients that skip
+*different* panels of the *same* size produce **identical spectra** and
+`s_graph = 1`. In this design that is exactly the group A / group B contrast
+whenever the skipped panels have equal sizes (kin8nm: two pairs), so raw
+`s_graph` would call complementary clients identical. Before E4, `s_graph`
+must either be **dropped** or made **identity-aware** (for example, compare
+Laplacians on the shared, labelled node set rather than their spectra). Not
+decided; recorded here so it is not implemented as written.
 
 ### 15.4 E4 diagnostic — panel recovery
 

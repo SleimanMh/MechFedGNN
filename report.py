@@ -16,6 +16,8 @@ from scipy.stats import kendalltau
 
 from kernel import aggregate, donor_weights
 from loop import ARMS
+from report_tables import (_md, averaging_harm, compute_md, contrasts_md, fallback_md,
+                           recovery_md, selection_md)
 
 SCORES = ["W_H", "W_C", "s", "rate", "S", "Q"]
 READING = """| Result | Interpretation |
@@ -25,7 +27,7 @@ READING = """| Result | Interpretation |
 | An arm beats local-only and uniform-donor | Its weighting is doing real work |
 | An arm beats local-only but not uniform-donor | The gain is from collaborating at all, not from the weights |
 | Gains at timepoint 1 but not timepoint 2 | The benefit may be limited to initialisation |
-| NO HEADROOM verdict | No aggregation rule could have improved on local training here |"""
+| NO HEADROOM verdict | The pooled reference did not beat local here; a subset-weighted rule still might — read it beside the arm results |"""
 
 
 def run_id(cfg):
@@ -38,16 +40,18 @@ def run_id(cfg):
     return f"{datetime.date.today():%Y%m%d}_{sha}_{h}"
 
 
-def frames(outs):
-    cat = lambda key: pd.DataFrame([r for o in outs for r in o[key]])
-    return cat("metrics"), cat("scores"), cat("weights"), cat("headroom")
+def frames(outs, keys=("metrics", "scores", "weights", "headroom")):
+    cat = lambda key: pd.DataFrame([r for o in outs for r in o.get(key, [])])
+    return tuple(cat(k) for k in keys)
 
 
 def write_csvs(out_dir, outs):
+    """metrics.csv and scores.csv are deterministic per seed; candidates.csv too.
+    compute.csv holds wall-clock seconds, so it is not."""
     os.makedirs(out_dir, exist_ok=True)
-    m, s, _, _ = frames(outs)
-    m.to_csv(os.path.join(out_dir, "metrics.csv"), index=False, float_format="%.10g")
-    s.to_csv(os.path.join(out_dir, "scores.csv"), index=False, float_format="%.10g")
+    for key in ["metrics", "scores", "candidates", "compute"]:
+        (t,) = frames(outs, (key,))
+        t.to_csv(os.path.join(out_dir, f"{key}.csv"), index=False, float_format="%.10g")
 
 
 def _jsonable(x):
@@ -56,16 +60,6 @@ def _jsonable(x):
     if isinstance(x, np.ndarray):
         return x.tolist()
     return x
-
-
-def _md(df, index=True):
-    """Minimal GitHub markdown table (avoids a tabulate dependency)."""
-    df = df.reset_index() if index else df
-    fmt = lambda v: f"{v:.4g}" if isinstance(v, float) else str(v)
-    head = [str(c) for c in df.columns]
-    body = [[fmt(v) for v in row] for row in df.itertuples(index=False)]
-    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-    return "\n".join(lines + ["| " + " | ".join(r) + " |" for r in body])
 
 
 def _pairs(A, names, k, largest=True):
@@ -88,39 +82,11 @@ def fedavg_limit_ok():
     return bool(np.allclose(out, sum(pk * t for pk, t in zip(p, th)), atol=1e-8, rtol=0))
 
 
-def averaging_harm(m):
-    """E1 primary question (CLAUDE.md §10): harm from indiscriminate averaging.
-    Per receiver: local-only - fedavg and local-only - uniform-donor (RMSE;
-    negative = the averaging arm is worse). Per arm: receivers and
-    receiver-seeds it harms relative to local-only."""
-    r = m[m.metric == "rmse"]
-    L = ["**Harm from averaging, per receiver** (RMSE, mean over seeds; negative = worse than local-only)", ""]
-    rows = []
-    for rec, g in r.groupby("receiver"):
-        row = {"receiver": rec}
-        for tp in ["t1", "t2"]:
-            at = g[g.timepoint == tp].groupby("arm")["value"].mean()
-            row[f"local-fedavg {tp}"] = at["local-only"] - at["fedavg"]
-            row[f"local-uniform {tp}"] = at["local-only"] - at["uniform-donor"]
-        rows.append(row)
-    L += [pd.DataFrame(rows).round(4).pipe(_md, index=False), ""]
-    counts = []
-    for arm in [a for a in ARMS if a != "local-only"]:
-        row = {"arm": arm}
-        for tp in ["t1", "t2"]:
-            g = r[r.timepoint == tp].pivot_table(index=["seed", "receiver"], columns="arm", values="value")
-            harmed = g[arm] > g["local-only"]
-            per_rec = g.groupby(level="receiver").mean()
-            row[f"receivers harmed {tp}"] = f"{int((per_rec[arm] > per_rec['local-only']).sum())}/{len(per_rec)}"
-            row[f"receiver-seeds harmed {tp}"] = f"{int(harmed.sum())}/{len(harmed)}"
-        counts.append(row)
-    L += ["**Receivers harmed relative to local-only, per arm**", "",
-          pd.DataFrame(counts).pipe(_md, index=False), ""]
-    return L
-
-
 def build_report(cfg, name, df, roles, dropped, outs):
-    m, s, w, h = frames(outs)
+    m_all, s, w, h, cand, comp = frames(outs, ("metrics", "scores", "weights", "headroom",
+                                               "candidates", "compute"))
+    fold = "test" if "test" in set(m_all.fold) else "val"
+    m = m_all[m_all.fold == fold]
     feats, inj, cc, ac, mc = roles["features"], cfg["injection"], cfg["clients"], cfg["aggregation"], cfg["model"]
     first = outs[0]["params"]
     L = [f"# Run report - {cfg.get('experiment', 'run')} / {name}", ""]
@@ -192,6 +158,8 @@ def build_report(cfg, name, df, roles, dropped, outs):
                  + (f" UNDEFINED: {undefined} - that arm fell back to the size anchor p_j." if undefined else "")
                  + (f" Q fallback fired for donors {fb}." if fb else ""))
     L.append("")
+    L += recovery_md({o["metrics"][0]["seed"]: o["params"] for o in outs})
+    L += fallback_md(w)
 
     L += ["## 5. Aggregation and headroom", ""]
     hs = h.groupby("receiver").agg(loss_local=("loss_local", "mean"), loss_pooled=("loss_pooled", "mean"),
@@ -206,11 +174,14 @@ def build_report(cfg, name, df, roles, dropped, outs):
           "- Headroom references (local, pooled) share one protocol: from theta_0, early-stopped on the "
           "receiver's validation fold, evaluated on its test fold.",
           f"- FedAvg limit check in this run: {'PASSED' if fedavg_limit_ok() else 'FAILED'}.", ""]
+    L += compute_md(comp, cfg["clients"]["K"])
 
     L += ["## 6. Results and ablations", ""]
     if (h.verdict == "NO HEADROOM").any():
-        L += ["> **NO HEADROOM** for " + ", ".join(sorted(h[h.verdict == 'NO HEADROOM'].receiver.unique()))
-              + ": results below are noise around the receiver's own optimum there.", ""]
+        L += ["> Context, not a gate: **NO HEADROOM** (pooled reference) for "
+              + ", ".join(sorted(h[h.verdict == 'NO HEADROOM'].receiver.unique()))
+              + ". Differences between arms there are expected to be small or unstable under this "
+              "configuration; a subset-weighted arm may still differ.", ""]
     if (h.verdict == "POOLING HARMS").any():
         L += ["> **POOLING HARMS** for " + ", ".join(sorted(h[h.verdict == 'POOLING HARMS'].receiver.unique()))
               + ": indiscriminate pooling is worse than local there, beyond sampling noise.", ""]
@@ -235,6 +206,8 @@ def build_report(cfg, name, df, roles, dropped, outs):
     per["frac_harmed"] = (delta > 0).mean(1)
     L += ["**Per-receiver RMSE, timepoint 2** (mean over seeds)", "", per.loc[ARMS].round(4).pipe(_md), ""]
     L += averaging_harm(m)
+    L += contrasts_md(m_all, fold)
+    L += selection_md(m_all, cand, fold)
     u = s[s.score == "W_H"].groupby(["receiver", "donor"])[["U_t1", "U_t2"]].mean()
     L += ["**Measured transfer benefit U[i<-j]** (RMSE reduction vs local-only; mean over seeds)", "",
           u.round(4).pipe(_md), ""]
