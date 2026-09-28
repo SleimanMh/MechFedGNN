@@ -50,20 +50,32 @@ def form_panels(X):
     return panels, med
 
 
-def build_roles(df):
+MASKABLE_PERM_SEED = 2026   # §16 target-independent control, declared before the run
+
+
+def build_roles(df, groups=None, maskable_mode="corr"):
     """Column roles, panels and histogram bin edges, from the design split only.
+
+    maskable_mode "corr": the least target-correlated half is maskable (E1).
+    maskable_mode "random": the first floor(d_live/2) non-constant features after
+    a fixed permutation (seed MASKABLE_PERM_SEED) - target-independent (§16).
 
     Features constant on the design rows carry no information: they are listed
     as `constant`, never masked and never used as characteristics or drivers.
     """
     feats = [c for c in df.columns if c != "target"]
-    design, _ = design_split(len(df))
+    design, _ = design_split(len(df), groups=groups)
     X = df[feats].to_numpy(float)[design]
     y = df["target"].to_numpy(float)[design][:, None]
     constant = [i for i in range(len(feats)) if X[:, i].std() == 0]
     live = [i for i in range(len(feats)) if i not in constant]
     corr_y = _abs_corr(X, y)[:, 0]
-    order = sorted(live, key=lambda i: (corr_y[i], i))
+    if maskable_mode == "corr":
+        order = sorted(live, key=lambda i: (corr_y[i], i))
+    elif maskable_mode == "random":
+        order = [live[i] for i in np.random.default_rng(MASKABLE_PERM_SEED).permutation(len(live))]
+    else:
+        raise ValueError(maskable_mode)
     n_mask = len(live) // 2
     maskable = sorted(order[:n_mask])
     always = sorted(order[n_mask:])
@@ -80,15 +92,17 @@ def build_roles(df):
         "bin_edges": {feats[i]: [float(e) for e in decile_edges(X[:, i])] for i in always},
         "design_seed": DESIGN_SEED,
         "n_design_rows": int(len(design)),
+        "maskable_mode": maskable_mode,
+        "duplicate_grouped": groups is not None,
     }
 
 
-def load_or_build_roles(name, df, cfg_dir="configs/roles"):
+def load_or_build_roles(name, df, cfg_dir="configs/roles", groups=None, maskable_mode="corr"):
     path = os.path.join(cfg_dir, f"{name}.yaml")
     if os.path.exists(path):
         with open(path) as f:
             return yaml.safe_load(f)
-    roles = build_roles(df)
+    roles = build_roles(df, groups, maskable_mode)
     os.makedirs(cfg_dir, exist_ok=True)
     with open(path, "w") as f:
         yaml.safe_dump(roles, f, sort_keys=False)

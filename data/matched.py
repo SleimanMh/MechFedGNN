@@ -12,7 +12,7 @@ import itertools
 
 import numpy as np
 
-from data.clients import _split, assign_rows_homogeneous, client_profiles
+from data.clients import _split, assign_rows_homogeneous, client_profiles, dup_groups, relocate_duplicates
 from data.design import design_split
 from data.inject import _abs_corr, _calibrate, _driver_scores, _sigmoid
 
@@ -33,10 +33,10 @@ def _pairings(items):
             yield tuple(sorted(((first, other),) + tail))
 
 
-def partitions(df, roles):
+def partitions(df, roles, groups=None):
     """(pi_A, pi_B, singleton, quality) by the rule declared in CLAUDE.md before computation."""
     mk = list(roles["maskable"])
-    design, _ = design_split(len(df))
+    design, _ = design_split(len(df), groups=groups)
     X = df[roles["features"]].to_numpy(float)[design]
     C = _abs_corr(X, X)
     free, pi_a = set(mk), []
@@ -104,13 +104,17 @@ def build_matched_clients(df, roles, cfg, seed, condition, rate=0.3):
     rng = np.random.default_rng([seed, 0])
     _, groups = client_profiles(len(roles["panels"]), rng, cc["K"], cc["G"], cc["profile_noise"],
                                 cc["p_rare"], cc["p_usual"])        # same draws as E1 -> same rows
+    groups_dup = dup_groups(df, cfg)
     parts = assign_rows_homogeneous(len(X), cc["K"], rng)
-    pi_a, pi_b, singleton, quality = partitions(df, roles)
+    splits = [_split(len(rows), cc["split"], np.random.default_rng([seed, 3, k])) for k, rows in enumerate(parts)]
+    if groups_dup is not None:
+        parts, splits = relocate_duplicates(len(X), parts, splits, groups_dup)
+    pi_a, pi_b, singleton, quality = partitions(df, roles, groups_dup)
     jitter = inj["jitter"]
     p = (1 - rate) / (1 - jitter)
     clients = []
     for k, rows in enumerate(parts):
-        split = _split(len(rows), cc["split"], np.random.default_rng([seed, 3, k]))
+        split = splits[k]
         panels = panels_of(pi_a if groups[k] == 0 else pi_b, singleton)
         M = np.ones((len(rows), X.shape[1]), dtype=np.int8)
         for fi, fold in enumerate(FOLDS):

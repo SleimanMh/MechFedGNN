@@ -7,7 +7,7 @@ profile, summaries later taken from training rows only.
 """
 import numpy as np
 
-from data.design import design_split
+from data.design import design_split, duplicate_groups, representatives
 from data.inject import inject
 
 P_RARE = 0.2
@@ -63,8 +63,13 @@ def size_check(n, K, split):
     return status, sizes
 
 
+def dup_groups(df, cfg):
+    """Duplicate-group ids when the §16 correction is on, else None (E1 behaviour)."""
+    return duplicate_groups(df) if (cfg.get("corrections") or {}).get("dup_groups") else None
+
+
 def client_pool(n):
-    """Rows eligible for clients: everything outside the design split."""
+    """Rows eligible for clients: everything outside the (E1) design split."""
     return design_split(n)[1]
 
 
@@ -72,6 +77,27 @@ def assign_rows_homogeneous(n, K, rng):
     """Shuffle the pool and split it into K disjoint, near-equal parts."""
     pool = rng.permutation(client_pool(n))
     return [np.sort(part) for part in np.array_split(pool, K)]
+
+
+def relocate_duplicates(n, parts, splits, groups):
+    """§16: move every duplicate group to the location (design split, or client
+    and fold) of its representative - the group's lowest row index - under the
+    E1 assignment. Unbiased (the representative's location is as random as any
+    row's), keeps every group within one location, and moves only duplicate
+    members. Returns (parts, splits) as row indices / client-local indices."""
+    loc = np.full(n, -1)                                   # -1 = design split
+    folds = ["train", "val", "test"]
+    for k, rows in enumerate(parts):
+        for fi, f in enumerate(folds):
+            loc[rows[splits[k][f]]] = 3 * k + fi
+    loc = loc[representatives(groups)]
+    new_parts, new_splits = [], []
+    for k in range(len(parts)):
+        rows = np.flatnonzero(loc // 3 == k)
+        rows = rows[loc[rows] >= 0]
+        new_parts.append(rows)
+        new_splits.append({f: np.flatnonzero(loc[rows] == 3 * k + fi) for fi, f in enumerate(folds)})
+    return new_parts, new_splits
 
 
 def partition_col(roles):
@@ -114,6 +140,7 @@ def build_clients(df, roles, cfg, seed):
     X = df[roles["features"]].to_numpy(float)
     y = df["target"].to_numpy(float)
     rng = np.random.default_rng([seed, 0])
+    groups_dup = dup_groups(df, cfg)
     prof, groups = client_profiles(len(roles["panels"]), rng, cc["K"], cc["G"],
                                    cc["profile_noise"], cc["p_rare"], cc["p_usual"])
     if cc["population"] == "population_homogeneous":
@@ -122,12 +149,14 @@ def build_clients(df, roles, cfg, seed):
         parts = assign_rows_stratified(X, cc["frac_low"], rng, roles)
     else:
         raise ValueError(cc["population"])
+    splits = [_split(len(rows), cc["split"], np.random.default_rng([seed, 3, k])) for k, rows in enumerate(parts)]
+    if groups_dup is not None:
+        parts, splits = relocate_duplicates(len(X), parts, splits, groups_dup)
     clients = []
     for k, rows in enumerate(parts):
         M = _inject_client(X[rows], y[rows], roles, prof[k], inj, seed, k)
-        split = _split(len(rows), cc["split"], np.random.default_rng([seed, 3, k]))
         clients.append({"id": f"c{k}", "k": k, "rows": rows, "X": X[rows], "y": y[rows], "M": M,
-                        "profile": prof[k], "group": int(groups[k]), **split})
+                        "profile": prof[k], "group": int(groups[k]), **splits[k]})
     small = [c["id"] for c in clients if len(c["train"]) < MIN_TRAIN]
     if small:
         raise ValueError(f"precondition failed: clients {small} have < {MIN_TRAIN} training rows "

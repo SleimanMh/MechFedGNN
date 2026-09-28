@@ -42,3 +42,33 @@ def mixture_rows(seed, receiver, thetas, i, mixtures, singles):
                          "to_uniform_mix": float(np.linalg.norm(x - uni)),
                          "to_receiver_local": float(np.linalg.norm(x - own))})
     return rows
+
+
+def _rms(a, b):
+    return float(np.sqrt(np.mean((np.asarray(a) - np.asarray(b)) ** 2)))
+
+
+def function_rows(seed, receiver, client_preds, preds, main_b, local_rmse):
+    """Functional comparison on the receiver's test inputs, shared coordinates
+    (§16): RMS prediction difference between every pair of client local models,
+    and between each arm / single-donor mix and the uniform-donor mixture (and
+    local-only) at t1 and t2. `rel` divides by the receiver's local-only test RMSE."""
+    rows = []
+    ids = sorted(client_preds)
+    for x in range(len(ids)):
+        for y in range(x + 1, len(ids)):
+            v = _rms(client_preds[ids[x]], client_preds[ids[y]])
+            rows.append({"seed": seed, "receiver": receiver, "kind": "client-client", "a": ids[x],
+                         "b": ids[y], "timepoint": "-", "rms": v, "rel": v / local_rmse})
+    uni, loc = preds["adapt:uniform-donor"], preds["adapt:local-only"]
+    for comp, per_step in preds.items():
+        kind, name = comp.split(":", 1)
+        for step, tp in [(0, "t1"), (main_b, "t2")]:
+            refs = [("uniform-donor", uni)] + ([("local-only", loc)] if kind == "candidate" else [])
+            for ref_name, ref in refs:
+                if comp == f"adapt:{ref_name}":
+                    continue
+                v = _rms(per_step[step], ref[step])
+                rows.append({"seed": seed, "receiver": receiver, "kind": "arm" if kind == "adapt" else "single",
+                             "a": name, "b": ref_name, "timepoint": tp, "rms": v, "rel": v / local_rmse})
+    return rows

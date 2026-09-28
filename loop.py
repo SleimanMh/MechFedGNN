@@ -12,7 +12,8 @@ import time
 
 import numpy as np
 
-from data.clients import asymmetric_receiver, build_clients
+from data.clients import asymmetric_receiver, build_clients, dup_groups
+from data.design import design_split
 from headroom import headroom_row, reference_losses
 import geometry
 from kernel import aggregate, donor_weights
@@ -34,6 +35,27 @@ def for_dataset(cfg, name):
             base[k] = merge(base.get(k, {}), v) if isinstance(v, dict) else v
         return base
     return merge(copy.deepcopy(cfg), (cfg.get("dataset_overrides") or {}).get(name, {}))
+
+
+def shared_scaler(df, roles, cfg):
+    """§16 correction: one frozen standardisation for every client, from the
+    design split only (a simulation assumption). None = per-client (E1)."""
+    if not (cfg.get("corrections") or {}).get("shared_scaler"):
+        return None
+    design, _ = design_split(len(df), groups=dup_groups(df, cfg))
+    X = df[roles["features"]].to_numpy(float)[design]
+    return Standardiser(X, np.ones_like(X, dtype=np.int8), df["target"].to_numpy(float)[design])
+
+
+def scaler_for(shared, c):
+    """The client's scaler: shared coordinates when set (AUC still binarises at
+    the client's own training-fold median), else its own training-fold scaler."""
+    tr = c["train"]
+    if shared is None:
+        return Standardiser(c["X"][tr], c["M"][tr], c["y"][tr])
+    st = copy.copy(shared)
+    st.y_median = float(np.median(c["y"][tr]))
+    return st
 
 
 def _seed(*parts):
@@ -102,8 +124,9 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
     K, d = len(clients), len(roles["features"])
     hidden = tuple(mc["hidden"])
     theta0 = init_params(d, _seed(seed, 10), hidden)
+    shared = shared_scaler(df, roles, cfg)
     out = {"metrics": [], "candidates": [], "scores": [], "weights": [], "headroom": [], "compute": [],
-           "geometry": []}
+           "geometry": [], "function": []}
 
     def compute(receiver, component, steps, n_rows, seconds):
         out["compute"].append({"seed": seed, "receiver": receiver, "component": component, "steps": int(steps),
@@ -111,7 +134,7 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
 
     def fit_local(c, purpose, receiver):
         t = time.perf_counter()
-        st = Standardiser(c["X"][c["train"]], c["M"][c["train"]], c["y"][c["train"]])
+        st = scaler_for(shared, c)
         xin, yt = st.inputs(c["X"][c["train"]], c["M"][c["train"]]), st.target(c["y"][c["train"]])
         theta = train(theta0, d, xin, yt, mc["local_steps"], _seed(seed, purpose, int(c["id"][1:])), mc)
         compute(receiver, f"local:{c['id']}", mc["local_steps"], len(c["train"]), time.perf_counter() - t)
@@ -136,10 +159,15 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
         evals = {f: _fold(rec, st, f) for f in folds}
         adapt_seed = _seed(seed, 30, i)
 
+        u_fold, preds = folds[-1], {}
+
         def trajectory(theta, component):
-            """{fold: {budget: metrics}} along one adaptation run."""
+            """{fold: {budget: metrics}} along one adaptation run; test-fold
+            predictions at t1 and t2 go to preds[component] (functional check)."""
             res = {f: {} for f in folds}
             def record(step, params):
+                if shared is not None and step in (0, main_b):
+                    preds.setdefault(component, {})[step] = predict(params, d, evals[u_fold][0], st, hidden)
                 for f, (x, y) in evals.items():
                     res[f][step] = metrics(y, predict(params, d, x, st, hidden), st.y_median)
             t = time.perf_counter()
@@ -171,7 +199,6 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
                         out["weights"].append({"seed": seed, "receiver": rec["id"], "arm": arm,
                                                "donor": clients[j]["id"], "weight": float(w[j]),
                                                "gamma": float(gamma), "fallback": fallback})
-        u_fold = folds[-1]
         for j, sc in scores.items():
             e = np.zeros(K)
             e[j] = 1.0
@@ -186,6 +213,10 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
                                       "U_fold": u_fold, "Q_source": sc["Q_source"],
                                       "same_group": bool(groups[j] == groups[i])})
         out["geometry"] += geometry.mixture_rows(seed, rec["id"], thetas, i, mixtures, singles)
+        if shared is not None:
+            client_preds = {c["id"]: predict(t, d, evals[u_fold][0], st, hidden) for c, t in zip(view, thetas)}
+            out["function"] += geometry.function_rows(seed, rec["id"], client_preds, preds, main_b,
+                                                      local_traj[u_fold][main_b]["rmse"])
         if headroom:
             t = time.perf_counter()
             ref = reference_losses(theta0, d, rec, view, st, cfg, _seed(seed, 40, i))

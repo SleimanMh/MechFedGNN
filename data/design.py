@@ -21,11 +21,31 @@ def design_size(n):
     return int(max(round(DESIGN_FRAC * n), DESIGN_MIN))
 
 
-def design_split(n, seed=DESIGN_SEED):
-    """Return (design_idx, pool_idx), sorted, disjoint, covering range(n)."""
+def duplicate_groups(df):
+    """Group id per row: rows with identical feature vector AND target share an id."""
+    key = pd.util.hash_pandas_object(df, index=False).to_numpy()
+    return np.unique(key, return_inverse=True)[1]
+
+
+def representatives(groups):
+    """For every row, the lowest row index of its duplicate group."""
+    groups = np.asarray(groups)
+    rep = np.full(groups.max() + 1, len(groups))
+    np.minimum.at(rep, groups, np.arange(len(groups)))
+    return rep[groups]
+
+
+def design_split(n, seed=DESIGN_SEED, groups=None):
+    """Return (design_idx, pool_idx), sorted, disjoint, covering range(n).
+    With `groups`, every duplicate group follows its representative (lowest row
+    index), so no group crosses the boundary and only duplicate members move."""
     perm = np.random.default_rng(seed).permutation(n)
     n_design = design_size(n)
-    return np.sort(perm[:n_design]), np.sort(perm[n_design:])
+    in_design = np.zeros(n, dtype=bool)
+    in_design[perm[:n_design]] = True
+    if groups is not None:                       # a group goes where its representative went
+        in_design = in_design[representatives(groups)]
+    return np.flatnonzero(in_design), np.flatnonzero(~in_design)
 
 
 def decile_edges(x):

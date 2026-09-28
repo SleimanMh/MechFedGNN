@@ -49,7 +49,7 @@ def write_csvs(out_dir, outs):
     """metrics.csv and scores.csv are deterministic per seed; candidates.csv too.
     compute.csv holds wall-clock seconds, so it is not."""
     os.makedirs(out_dir, exist_ok=True)
-    for key in ["metrics", "scores", "candidates", "compute", "geometry"]:
+    for key in ["metrics", "scores", "candidates", "compute", "geometry", "function"]:
         (t,) = frames(outs, (key,))
         t.to_csv(os.path.join(out_dir, f"{key}.csv"), index=False, float_format="%.10g")
 
@@ -91,7 +91,9 @@ def build_report(cfg, name, df, roles, dropped, outs):
            f"- Missingness asymmetry: as receiver, a client orders its group's rarely-ordered panels at "
            f"{cc['receiver_p_rare']} instead of {cc['p_rare']} (mask re-injected, same random draws); "
            "sizes unchanged."),
-          f"- Native NaNs before injection: {int(df.isna().sum().sum())} (asserted zero at download).", ""]
+          f"- Native NaNs before injection: {int(df.isna().sum().sum())} (asserted zero at download).",
+          (f"- **§16 correction study (EXPLORATORY)**: {cfg['corrections']}" if cfg.get("corrections") else ""),
+          ""]
 
     mk = [feats[i] for i in roles["maskable"]]
     panel_txt = (f"E1M condition ({e1m['condition']}), mechanism `{e1m['mechanism']}`: group 0 pairs "
