@@ -712,6 +712,29 @@ test:* with matched rates, `W_H` and `s` both favour same-partition donors
    record that as a finding about the **estimability of donor usefulness**,
    not about the scores.
 
+*Recorded before the E1M run (unmeasured hypotheses for E1's null).*
+Parameter geometry is logged during E1M (`geometry.csv`): pairwise distances
+between the clients' locally trained parameters, each client's distance from
+`θ0`, the distance of each arm's mixture (before adaptation) to the
+unweighted centroid of the four local models and to the `uniform-donor`
+mixture, and the distance of each single-donor mix to the receiver's local
+parameters.
+
+- **Hypothesis A:** the clients' parameters are too close for weighting to
+  matter.
+- **Hypothesis B:** individual donors differ meaningfully, but averaging
+  several models lands near the centroid however it is weighted, while
+  selecting one donor moves somewhere specific. (The concrete oracle gap,
+  3.2 %, argues against A before any distance is seen.)
+
+Neither is established; the distances adjudicate.
+
+*Wine runs as declared and is reported as confounded* (correlation-matching
+`|diff|` 0.198). The `|diff|` is carried as a covariate column
+(kin8nm 0.002, concrete 0.014, protein 0.094, wine 0.198), and whether any
+apparent structure effect tracks that ordering is reported as an observation,
+not a design change.
+
 **E2 — mechanism sweep.**
 Repeat E1 across `mcar`, `mar` (driver_overlap 0 / 0.5 / 1.0), `fd_mnar`,
 `cd_mnar` (class_spread 0 / 0.5 / 1.0), at rates 0.2 / 0.4.
