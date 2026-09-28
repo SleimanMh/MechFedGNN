@@ -160,12 +160,17 @@ def build_report(cfg, name, df, roles, dropped, outs):
     L += fallback_md(w)
 
     L += ["## 5. Aggregation and headroom", ""]
-    hs = h.groupby("receiver").agg(loss_local=("loss_local", "mean"), loss_pooled=("loss_pooled", "mean"),
-                                   headroom=("headroom", "mean"), rel=("rel_headroom", "mean"),
-                                   pooling_harm=("pooling_harm", "mean"),
-                                   pooled_worse=("pooling_harm", lambda v: int((v > 0).sum())),
-                                   verdicts=("verdict", lambda v: ", ".join(f"{k} x{int(n)}" for k, n in v.value_counts().items())))
-    L += [hs.round(4).pipe(_md), "",
+    if h.empty:
+        head_md = "Headroom: n/a (not computed in this run)."
+        h = pd.DataFrame({"receiver": [], "verdict": []})
+    else:
+        head_md = h.groupby("receiver").agg(
+            loss_local=("loss_local", "mean"), loss_pooled=("loss_pooled", "mean"),
+            headroom=("headroom", "mean"), rel=("rel_headroom", "mean"),
+            pooling_harm=("pooling_harm", "mean"), pooled_worse=("pooling_harm", lambda v: int((v > 0).sum())),
+            verdicts=("verdict", lambda v: ", ".join(f"{k} x{int(n)}" for k, n in v.value_counts().items()))
+        ).round(4).pipe(_md)
+    L += [head_md, "",
           f"- alpha {ac['alpha']}, beta {ac['beta']}, gamma {ac['gamma']} (fedavg: gamma = p_i), "
           f"lambda_pop {ac['lambda_pop']}, adaptation budget {mc['adapt_budget']} steps "
           f"(local-only: {mc['local_steps']} + {mc['adapt_budget']}).",
