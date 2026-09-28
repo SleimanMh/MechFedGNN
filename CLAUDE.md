@@ -538,6 +538,110 @@ group labels. `s` should recover the missingness groups; `rate` should do worse
 (clients differ in structure, not in overall rate); `S` should be at chance under
 `population_homogeneous`.
 
+**E1 outcome (recorded 2026-09-28; runs `results/e1/20260928_f86e996_*`).**
+Pre-registered analysis (§8.1, δ = 2 %, seed = replication unit, n = 10):
+
+- **Score-based donor weighting vs the equal-donor control.** All 48
+  score-arm vs `uniform-donor` contrasts (6 score arms × 4 datasets × 2
+  timepoints) have their **entire 95 % interval inside ±2 %** → negligible.
+  Largest interval bound: +1.44 % (concrete, `coverage-W_C`, t1).
+- **Differences from `fedavg` are reproduced by the equal-donor control**
+  (`uniform-donor`, γ = 0.5, equal donor weights) and **do not establish an
+  advantage from score-based donor weighting.** FedAvg's self-weight is
+  `p_i` = 0.25 with four equal clients; changing it would make a different
+  algorithm, so no matched-γ FedAvg is run — `uniform-donor` is the control
+  that isolates donor weighting.
+- **Averaging harm (primary question).** kin8nm: every mixing arm harms 3/4
+  receivers; `fedavg` vs `local-only` +1.9 % [1.3, 2.4] (inconclusive against
+  δ), score arms +1.0–1.3 % (negligible). protein: every mixing arm harms 4/4
+  receivers, all contrasts negligible (+0.4–0.8 %). No weighting rule avoids
+  the harm; the harm itself is below δ except `fedavg` on kin8nm, whose
+  interval straddles it. wine: all mixing arms meaningfully better than
+  `local-only` (−6.6 to −7.5 %); concrete: −3.8 to −4.1 %, mostly
+  inconclusive (underpowered, as §8.1 predicted).
+
+**Group recovery — limitation, stated plainly.** `rate` (marginal-rate
+similarity) achieves **ARI 1.0 on all four datasets**. In this construction
+the latent groups differ in their ordering *rates*, so **joint missingness is
+unnecessary to identify the injected groups**, and group recovery **cannot
+support the claim that pairwise structure adds information beyond marginal
+rates.** The §10 prediction ("`s` should recover the missingness groups;
+`rate` should do worse") **failed**: `s` reached ARI 1.0 on kin8nm, 0.8 on
+wine, 0.3 on protein and −0.05 on concrete, while `rate` was perfect
+everywhere.
+
+*Singleton check (exploratory, `analysis/singleton_c_check.py`, 10 seeds).*
+On concrete (`{f2}`) and protein (`{f6}`) the cross-panel `C` entries that
+involve the single-feature panel are small but **not zero** (mean +0.06 to
++0.10). Group information in `C` sits in the **magnitude** of the within-panel
+φ — ≈ 0.94 in the group that rarely orders the panel, ≈ 0.65 in the group that
+usually orders it, so even that difference is **rate-driven** here. With two
+multi-feature panels (wine, kin8nm) the high/low pattern flips between groups
+and cosine similarity separates them (`s` within 0.994–0.998 vs between
+0.967). With a singleton there is only one within-panel block; both groups'
+`C` vectors point the same way at different lengths, and **cosine similarity
+discards length** — between-group `s` 0.9935 vs within 0.9922 (concrete),
+0.9991 vs 0.9997 (protein).
+
+*Ranking vs weighting (exploratory, `analysis/e1_ranking_vs_weighting.py`,
+test fold, γ = 0.5 and budget 10 matched throughout).* `s` and `S` scores
+barely vary across donors (relative range ≤ 0.035), so their weights are
+≈ uniform (max weight ≤ 0.340) before any normalisation — the compression is
+in the score, not the normaliser. `rate`, `W_H` and `W_C` do produce
+non-uniform weights (max weight 0.42–0.56), yet their arms still land within
+±0.4 % of `uniform-donor`. The top-ranked single donor is not reliably better
+than a uniformly drawn one (all contrasts negligible except concrete t1,
+inconclusive); on kin8nm and protein it is often the least-harmful donor
+rather than a positive one (`rate`'s top donor is best-but-still-worse than
+`local-only` in 40 % / 52 % of receiver-seeds at t2). The oracle-best single
+donor beats the uniform mixture by 0.4–3.2 % at t2, but a validation-selected
+single donor does not (negligible everywhere at t2). Differences present at
+t1 shrink after adaptation (e.g. concrete top-by-`rate` vs uniformly drawn:
+−3.3 % → −1.0 %).
+
+**E1M — matched-marginal test (specified, not run; runs before E2).** The
+decisive test of the thesis claim. It is the only construction where `rate`
+is **flat by design**, so pairwise structure alone can distinguish clients.
+
+- **Masks.** Every client orders every panel with the **same** probability
+  `p` (rate 0.3 → `p = 0.7/0.95`), `jitter = 0.05`, **profile noise 0**, and
+  **no receiver asymmetry** (it would break flatness). The groups differ
+  *only* in **which features go missing together**: group A uses panel
+  partition `π_A`, group B uses `π_B`, over the same maskable features.
+  Both partitions consist of **pairs** (a shared singleton only when the
+  maskable count is odd), and **share no pair**. `π_A` is the design-split
+  greedy pairing; `π_B` is the no-shared-pair alternative whose mean
+  within-pair `|corr|` on the design rows is closest to `π_A`'s, so feature
+  relatedness is balanced between groups.
+- **Mechanisms.** Primary: condition (b), independent panel masking.
+  Secondary: condition (c), `mar` with `driver_overlap = 0.5`. Null control:
+  condition (a), cell masking for every client (no structure to find).
+- **Everything else matched to E1:** homogeneous populations, K = 4 (2 per
+  group), same seeds, model, γ = 0.5, `adapt_budget = 10`, all nine arms,
+  folds, and the §8.1 analysis with δ = 2 %. Datasets: concrete, wine, kin8nm,
+  protein (all have ≥ 4 maskable features, so two pair partitions with no
+  shared pair exist).
+- **Design checks, reported before any arm result is read:** expected
+  per-feature rates identical across clients by construction; realised
+  per-feature rates within binomial noise (report the max `|r_i − r_j|`);
+  `rate` similarity equal within and between groups; `rate` ARI at chance;
+  within-panel φ of equal magnitude in both groups (removing E1's rate-driven
+  magnitude signal); `s` ARI near 1.
+- **Questions, in order.** (1) Ground truth: does transfer depend on
+  structure — mean `U(i←j)` for same-partition vs other-partition donors? If
+  not, no mask score can help here, and that is the finding. (2) Does any
+  pairwise-structure arm (`missingness-similarity`, `coverage-W_H`,
+  `coverage-W_C`) beat `uniform-donor` with its whole interval beyond −2 %?
+  (3) Does the top-ranked donor by `s` / `W_H` beat a uniformly drawn donor?
+  (4) Is `marginal-rate` ≈ `uniform-donor`, as flatness requires?
+- **Expected, recorded now:** under matched marginals the within-panel
+  `J_j[f,g]` is higher on the donor's *own* pairs, so `W_H` and `s` both
+  favour **same-partition** donors — coverage and similarity should rank
+  donors the same way here, which removes the coverage/similarity conflict
+  but not the question of whether either helps.
+- **Needs code:** per-group panel partitions in the injector (clients carry
+  their own `panels`); everything downstream already works from masks.
+
 **E2 — mechanism sweep.**
 Repeat E1 across `mcar`, `mar` (driver_overlap 0 / 0.5 / 1.0), `fd_mnar`,
 `cd_mnar` (class_spread 0 / 0.5 / 1.0), at rates 0.2 / 0.4.
