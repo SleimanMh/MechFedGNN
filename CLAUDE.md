@@ -545,6 +545,15 @@ Pre-registered analysis (§8.1, δ = 2 %, seed = replication unit, n = 10):
   score-arm vs `uniform-donor` contrasts (6 score arms × 4 datasets × 2
   timepoints) have their **entire 95 % interval inside ±2 %** → negligible.
   Largest interval bound: +1.44 % (concrete, `coverage-W_C`, t1).
+  **The equivalence is much tighter than δ:** every point estimate is
+  within ±0.40 % (`s` and `S` within ±0.015 %; `rate`, `W_H`, `W_C`, `Q`
+  up to 0.40 %), and at a stricter δ = 0.5 % the conclusion still holds on
+  three of four datasets — widest bounds 0.44 % (wine), 0.49 % (kin8nm),
+  0.14 % (protein); not on concrete (1.44 %).
+  **Practically negligible is not exactly zero:** several effects are
+  consistently signed across seeds — on kin8nm `marginal-rate` helps
+  slightly at both timepoints (−0.12 % [−0.16, −0.09] at t2) and `W_H` hurts
+  slightly (+0.22 % [+0.14, +0.29] at t2).
 - **Differences from `fedavg` are reproduced by the equal-donor control**
   (`uniform-donor`, γ = 0.5, equal donor weights) and **do not establish an
   advantage from score-based donor weighting.** FedAvg's self-weight is
@@ -589,58 +598,119 @@ barely vary across donors (relative range ≤ 0.035), so their weights are
 ≈ uniform (max weight ≤ 0.340) before any normalisation — the compression is
 in the score, not the normaliser. `rate`, `W_H` and `W_C` do produce
 non-uniform weights (max weight 0.42–0.56), yet their arms still land within
-±0.4 % of `uniform-donor`. The top-ranked single donor is not reliably better
+±0.4 % of `uniform-donor`. **So the hypothesis that normalisation
+compresses informative rankings into near-uniform weights is falsified.**
+A mechanism consistent with this — *not measured; no parameter distances
+were saved* — is that the clients' trained parameters are close enough that
+how the average is weighted barely matters; it would also explain why the
+validation-selected candidate, a discrete choice that can select
+`local-only`, behaves differently from every weighting arm. It needs a
+direct check (distances between the clients' local parameters) before it is
+stated as established. The top-ranked single donor is not reliably better
 than a uniformly drawn one (all contrasts negligible except concrete t1,
 inconclusive); on kin8nm and protein it is often the least-harmful donor
 rather than a positive one (`rate`'s top donor is best-but-still-worse than
 `local-only` in 40 % / 52 % of receiver-seeds at t2). The oracle-best single
-donor beats the uniform mixture by 0.4–3.2 % at t2, but a validation-selected
-single donor does not (negligible everywhere at t2). Differences present at
+donor (picked on test) beats the uniform mixture by 0.4–3.2 % at t2, but
+**the tested validation selector** (lowest validation RMSE among local-only
+and the single-donor mixes) **did not recover a meaningful advantage over the
+uniform mixture** (negligible everywhere at t2). Other selectors are not
+excluded. Differences present at
 t1 shrink after adaptation (e.g. concrete top-by-`rate` vs uniformly drawn:
 −3.3 % → −1.0 %).
 
-**E1M — matched-marginal test (specified, not run; runs before E2).** The
-decisive test of the thesis claim. It is the only construction where `rate`
-is **flat by design**, so pairwise structure alone can distinguish clients.
+**E1M — matched-marginal test (specified; runs before E2).** The only
+construction here where marginal rates are flat by design, so that joint
+missingness structure alone distinguishes clients.
 
-- **Masks.** Every client orders every panel with the **same** probability
-  `p` (rate 0.3 → `p = 0.7/0.95`), `jitter = 0.05`, **profile noise 0**, and
-  **no receiver asymmetry** (it would break flatness). The groups differ
-  *only* in **which features go missing together**: group A uses panel
-  partition `π_A`, group B uses `π_B`, over the same maskable features.
-  Both partitions consist of **pairs** (a shared singleton only when the
-  maskable count is odd), and **share no pair**. `π_A` is the design-split
-  greedy pairing; `π_B` is the no-shared-pair alternative whose mean
-  within-pair `|corr|` on the design rows is closest to `π_A`'s, so feature
-  relatedness is balanced between groups.
-- **Mechanisms.** Primary: condition (b), independent panel masking.
-  Secondary: condition (c), `mar` with `driver_overlap = 0.5`. Null control:
-  condition (a), cell masking for every client (no structure to find).
-- **Everything else matched to E1:** homogeneous populations, K = 4 (2 per
-  group), same seeds, model, γ = 0.5, `adapt_budget = 10`, all nine arms,
-  folds, and the §8.1 analysis with δ = 2 %. Datasets: concrete, wine, kin8nm,
-  protein (all have ≥ 4 maskable features, so two pair partitions with no
-  shared pair exist).
-- **Design checks, reported before any arm result is read:** expected
-  per-feature rates identical across clients by construction; realised
-  per-feature rates within binomial noise (report the max `|r_i − r_j|`);
-  `rate` similarity equal within and between groups; `rate` ARI at chance;
-  within-panel φ of equal magnitude in both groups (removing E1's rate-driven
-  magnitude signal); `s` ARI near 1.
-- **Questions, in order.** (1) Ground truth: does transfer depend on
-  structure — mean `U(i←j)` for same-partition vs other-partition donors? If
-  not, no mask score can help here, and that is the finding. (2) Does any
-  pairwise-structure arm (`missingness-similarity`, `coverage-W_H`,
-  `coverage-W_C`) beat `uniform-donor` with its whole interval beyond −2 %?
-  (3) Does the top-ranked donor by `s` / `W_H` beat a uniformly drawn donor?
-  (4) Is `marginal-rate` ≈ `uniform-donor`, as flatness requires?
-- **Expected, recorded now:** under matched marginals the within-panel
-  `J_j[f,g]` is higher on the donor's *own* pairs, so `W_H` and `s` both
-  favour **same-partition** donors — coverage and similarity should rank
-  donors the same way here, which removes the coverage/similarity conflict
-  but not the question of whether either helps.
-- **Needs code:** per-group panel partitions in the injector (clients carry
-  their own `panels`); everything downstream already works from masks.
+*What E1M can and cannot test.* With matched per-feature rates,
+`J = 1 − r_a − r_b + H` makes
+`W_H(i←j) = Σ H_i (1 − r_a − r_b) / Σ H_i + Σ H_i·H_j / Σ H_i`: a
+**donor-independent constant plus the overlap of the donor's joint-absence
+matrix with the receiver's**. Ranking donors by coverage therefore becomes
+ranking them by similarity to the receiver. With equal panel sizes and equal
+rates, `Σ H` is also matched across clients, so the denominators match and
+`W_H` is **effectively symmetric** here. E1M therefore tests **whether joint
+availability structure helps collaboration beyond marginal rates**. It does
+**not** contrast similarity against complementarity, and it does **not**
+demonstrate the value of directionality.
+
+- **Masks.** Every client orders every panel with the same probability
+  (rate 0.3 → `p = 0.7/0.95`), `jitter = 0.05`, profile noise 0, **no
+  receiver asymmetry**. The groups differ only in **which features go
+  missing together**: group A uses panel partition `π_A`, group B `π_B`,
+  over the same maskable features. Both partitions consist of **pairs**,
+  plus one singleton when the maskable count is odd; the singleton is the
+  **same feature** in both, and `π_A`, `π_B` share **no pair**.
+- **Partition selection — declared before any E1M computation, on the design
+  split only, never on outcomes.** `π_A` = greedy pairing of the maskable
+  features by descending `|corr|` on the design rows (the leftover feature,
+  if any, is the singleton). `π_B` = among all pairings of the same features
+  with the same singleton that share no pair with `π_A`, the one minimising
+  `| mean within-pair |corr|(π_B) − mean within-pair |corr|(π_A) |`; ties
+  broken by lexicographic order of the sorted pairs. The matching quality
+  (both means and their difference) is reported.
+- **Balanced counts, not just equal probabilities.** Equal ordering
+  probabilities match rates only in expectation. Masks are therefore
+  injected **per fold** (train / val / test of each client) with **exact
+  counts**: exactly `round(p·n)` rows ordered per panel, exactly
+  `round(jitter · n_ordered)` of those lost per member feature, so every
+  maskable feature in a fold has the same missing count. Condition (c)
+  draws its ordered rows **without replacement with probability ∝ q** (the
+  calibrated MAR ordering probability), keeping the count exact. The null
+  control (a) removes exactly the same count per feature, cell-wise.
+  Realised rates are still reported; the claim is exact matching **of counts
+  within a fold**, and across clients up to the ±1-row differences in fold
+  size.
+- **Tolerance, declared now.** Rates are matched if, on every fold of every
+  seed, `max |r_i,f − r_j,f| ≤ 0.01` over all clients `i, j` and maskable
+  features `f`. **If this fails, the construction is void and E1M does not
+  run.**
+- **Mechanisms.** Primary (b), independent panel masking. Secondary (c),
+  `mar`, `driver_overlap = 0.5`. Null control (a), cell masking for every
+  client.
+- **Everything else matched to E1:** the same rows per client and the same
+  splits per seed as E1, K = 4 (2 per group), same seeds, model, γ = 0.5,
+  `adapt_budget = 10`, all nine arms, folds, and the §8.1 analysis.
+  Datasets: concrete, wine, kin8nm, protein.
+
+*Construction checks — verifications, not targets.* Shown before anything
+trains:
+
+1. expected and realised per-feature rates per client and fold, and the
+   max pairwise difference against the tolerance. The strongest check is
+   the rate vectors themselves, identical or near-identical. **Not**
+   "rate-ARI at chance": clustering near-identical vectors partitions ties
+   arbitrarily, so it proves nothing;
+2. the `π_A` / `π_B` correlation-matching quality;
+3. within-panel φ per group, on `π_A` pairs and on `π_B` pairs. φ is **not
+   independently settable**: once marginal rates and joint absence are
+   fixed, φ is determined. This is a verification, not a knob;
+4. `s`-based group recovery (ARI). A high value confirms the construction
+   worked. It is **not a success criterion**, and the design is not
+   adjusted to raise it.
+
+*Recorded expectation — an algebraic consequence, not a hypothesis under
+test:* with matched rates, `W_H` and `s` both favour same-partition donors
+(see the decomposition above).
+
+*Analysis, reported in full whatever question 1 shows:*
+
+1. **Interpretation check, not a gate.** Same-partition vs other-partition
+   utility: within each receiver and seed, `mean U(same) − mean U(other)` (1
+   same-partition and 2 other-partition donors at K = 4), then aggregated by
+   seed with the §8.1 interval, at both timepoints. Report donor counts and
+   ties. No average group difference would explain why partition-based
+   weighting adds little. It would not exclude receiver-specific effects,
+   and single-donor utility does not fully determine mixture performance.
+2. Every arm vs `uniform-donor`, §8.1 intervals, δ = 2 %.
+3. Top-ranked donor (by `s` and by `W_H`) vs a uniformly drawn donor.
+4. `marginal-rate` vs `uniform-donor` (flat rates imply ≈ equal weights).
+5. **Oracle vs validation gap**, as in E1: the test-picked best single donor
+   vs the uniform mixture, and the validation-picked donor vs the uniform
+   mixture. If an oracle gap exists but validation cannot find it again,
+   record that as a finding about the **estimability of donor usefulness**,
+   not about the scores.
 
 **E2 — mechanism sweep.**
 Repeat E1 across `mcar`, `mar` (driver_overlap 0 / 0.5 / 1.0), `fd_mnar`,
