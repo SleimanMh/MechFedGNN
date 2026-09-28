@@ -735,6 +735,44 @@ Neither is established; the distances adjudicate.
 apparent structure effect tracks that ordering is reported as an observation,
 not a design change.
 
+**E1M outcome (recorded 2026-09-28; `results/e1m/`, analysis `results/e1m/analysis.txt`).**
+Construction valid (rates matched, max 0.0014). Test fold, seed = unit (n = 10), δ = 2 %.
+
+1. **Same- vs other-partition utility** (U(same) − mean U(other), % of
+   local-only RMSE; 1 same and 2 other donors per receiver; no ties): under
+   (b) at t2 — kin8nm +0.24 [−0.05, +0.53], concrete −1.50 [−2.92, −0.09],
+   protein +0.12 [+0.02, +0.22], wine −0.26 [−1.31, +0.80]; (c) similar. The
+   same-partition donor is the single best donor in 5–21 of 40 receiver-seeds
+   (chance ≈ 13). Effects of the same size appear under the null (a). **No
+   average structure-dependent transfer beyond what the null shows.** This
+   does not exclude receiver-specific effects.
+2. **Every score arm vs `uniform-donor`: negligible in all 72 contrasts**
+   (6 arms × 4 datasets × 3 conditions; every interval inside ±2 %, the
+   largest bound +1.50 %). `marginal-rate` equals `uniform-donor` to 0.00 %,
+   as flat rates require. Under (b)/(c) the top donor by `s` and by `W_H` is
+   identical in every receiver-seed, as the matched-rate algebra implies.
+3. **Oracle vs validation.** The test-picked best single donor beats the
+   uniform mixture by 0.1–4.0 % (meaningful on concrete in (a) t2, (b) t1,
+   (c) t2); the validation-picked donor never does (negligible or
+   inconclusive, often worse). The gap is the same under the null (a).
+   Recorded as a finding about the **estimability of donor usefulness**, not
+   about the scores.
+4. **Covariate.** The apparent structure effects do not track the
+   correlation-matching `|diff|` ordering (kin8nm +0.24, concrete −1.50,
+   protein +0.12, wine −0.26 under (b), t2) — observation only.
+5. **Geometry (hypotheses A / B).** Client–client parameter distances
+   (1.4–4.9) are 0.67–1.23× each client's own distance from `θ0`: the clients
+   are **not** close relative to how far training moved them — **A is not
+   supported**. Every score-arm mixture lies within 0.00–0.34 of the
+   `uniform-donor` mixture (0.29–0.98 from the centroid), while single-donor
+   mixes lie 0.50–1.72 from the centroid — **consistent with B**: donors
+   differ, averaging with these weights lands near the same point however
+   it is weighted, and selecting one donor moves somewhere specific. `fedavg`
+   (the centroid) is 0.29–0.98 from the uniform mixture, the largest
+   movement of any arm, and also the only arm with loss differences near δ.
+   Caveats: this is E1M's geometry, not E1's; L2 distance in parameter space
+   is not loss.
+
 **E2 — mechanism sweep.**
 Repeat E1 across `mcar`, `mar` (driver_overlap 0 / 0.5 / 1.0), `fd_mnar`,
 `cd_mnar` (class_spread 0 / 0.5 / 1.0), at rates 0.2 / 0.4.
