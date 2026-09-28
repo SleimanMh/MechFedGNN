@@ -3,6 +3,7 @@
 Each builder returns a list of markdown lines to append inside one of the six
 fixed report sections - no new sections.
 """
+import numpy as np
 import pandas as pd
 
 from loop import ARMS
@@ -18,6 +19,21 @@ def _md(df, index=True):
     body = [[fmt(v) for v in row] for row in df.itertuples(index=False)]
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     return "\n".join(lines + ["| " + " | ".join(r) + " |" for r in body])
+
+
+def _jsonable(x):
+    if isinstance(x, dict):
+        return {k: _jsonable(v) for k, v in x.items()}
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    return x
+
+
+def _pairs(A, names, k, largest=True):
+    iu = np.triu_indices(len(A), 1)
+    order = np.argsort(A[iu])
+    order = order[::-1][:k] if largest else order[:k]
+    return ", ".join(f"{names[iu[0][o]]}-{names[iu[1][o]]}={A[iu][o]:.3f}" for o in order)
 
 
 def averaging_harm(m):

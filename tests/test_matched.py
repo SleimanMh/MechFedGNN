@@ -39,3 +39,30 @@ def test_exact_counts_equal_across_features_within_every_fold(cond):
             assert len(set(miss.tolist())) == 1                        # identical count per feature
         assert (c["M"][:, roles["always_observed"]] == 1).all()
     assert [c["panels"] for c in clients if c["group"] == 0][0] != [c["panels"] for c in clients if c["group"] == 1][0]
+
+
+def test_run_seed_with_matched_builder_logs_geometry_and_groups(tmp_path):
+    import copy
+
+    from loop import run_seed
+    from report import write_run
+
+    df = _df(1200)
+    roles = build_roles(df)
+    cfg = yaml.safe_load(open("configs/defaults.yaml"))
+    cfg["model"]["local_steps"], cfg["model"]["adapt_budget"] = 20, 3
+    cfg["seeds"] = [11, 23]
+    builder = lambda seed: build_matched_clients(df, roles, cfg, seed, "b")[:2]
+    outs = [run_seed(df, roles, copy.deepcopy(cfg), s, folds=("val", "test"), headroom=False, builder=builder)
+            for s in cfg["seeds"]]
+    geo = pd.DataFrame(outs[0]["geometry"])
+    assert set(geo.kind) == {"client-client", "client-theta0", "arm", "single"}
+    fed = geo[(geo.kind == "arm") & (geo.a == "fedavg")]
+    uni = geo[(geo.kind == "arm") & (geo.a == "uniform-donor")]
+    assert fed.to_centroid.max() < 0.05 * uni.to_centroid.min()   # near-equal sizes: fedavg ~ the centroid
+    sc = pd.DataFrame(outs[0]["scores"])
+    assert sc.groupby(["receiver"])["same_group"].sum().eq(6).all()   # 1 same-group donor x 6 scores
+    cfg["e1m"] = {"condition": "b", "mechanism": "mcar", "pi_A": ["x"], "pi_B": ["y"], "singleton": None,
+                  "p": 0.7, "corr_diff": 0.0}
+    out = write_run("t", cfg, "syn", df, roles, [], outs, root=str(tmp_path))
+    assert "E1M condition (b)" in open(f"{out}/REPORT.md", encoding="utf-8").read()

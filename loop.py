@@ -14,6 +14,7 @@ import numpy as np
 
 from data.clients import asymmetric_receiver, build_clients
 from headroom import headroom_row, reference_losses
+import geometry
 from kernel import aggregate, donor_weights
 from model import Standardiser, init_params, metrics, predict, train
 from scores import combined_q, missingness_similarity, rate_similarity, w_c, w_h
@@ -89,18 +90,20 @@ def _fold(c, st, split):
     return st.inputs(c["X"][rows], c["M"][rows]), c["y"][rows]
 
 
-def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom=True):
+def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom=True, builder=None):
     """Returns dict of row lists: metrics, candidates, scores, weights, headroom,
-    compute, plus params. Metrics are recorded for every fold in `folds`
+    compute, geometry, plus params. `builder(seed) -> (clients, groups)` replaces
+    E1's client construction and disables the receiver asymmetry (E1M). Metrics are recorded for every fold in `folds`
     (pilots pass ("val",) so test is never evaluated); U uses the last fold."""
     mc, ac = cfg["model"], cfg["aggregation"]
     budgets = sorted(set([0] + list(budgets if budgets is not None else [mc["adapt_budget"]])))
     main_b = budgets[-1]
-    clients, groups = build_clients(df, roles, cfg, seed)
+    clients, groups = builder(seed) if builder else build_clients(df, roles, cfg, seed)
     K, d = len(clients), len(roles["features"])
     hidden = tuple(mc["hidden"])
     theta0 = init_params(d, _seed(seed, 10), hidden)
-    out = {"metrics": [], "candidates": [], "scores": [], "weights": [], "headroom": [], "compute": []}
+    out = {"metrics": [], "candidates": [], "scores": [], "weights": [], "headroom": [], "compute": [],
+           "geometry": []}
 
     def compute(receiver, component, steps, n_rows, seconds):
         out["compute"].append({"seed": seed, "receiver": receiver, "component": component, "steps": int(steps),
@@ -116,11 +119,12 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
 
     local_full = [fit_local(c, 20, "-")[0] for c in clients]
     summ_full = [summaries(c, roles) for c in clients]
-    out["params"] = {c["id"]: {**summ_full[k], "group": int(groups[k]), "profile": c["profile"]}
+    out["params"] = {c["id"]: {**summ_full[k], "group": int(groups[k]), "profile": c.get("profile")}
                      for k, c in enumerate(clients)}
+    out["geometry"] += geometry.client_rows(seed, local_full, theta0, [c["id"] for c in clients])
 
     for i, full in enumerate(clients):
-        rec = asymmetric_receiver(full, roles, cfg, seed)
+        rec = full if builder else asymmetric_receiver(full, roles, cfg, seed)
         theta_i, st = fit_local(rec, 21, rec["id"])
         view = clients[:i] + [rec] + clients[i + 1:]
         summ = summ_full[:i] + [summaries(rec, roles)] + summ_full[i + 1:]
@@ -151,10 +155,12 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
                                        "budget": b, "timepoint": "t1" if b == 0 else "t2", "metric": metric,
                                        "value": m[metric], "pos_rate": m["pos_rate"], **extra})
 
-        local_traj = None
+        local_traj, mixtures, singles = None, {}, {}
         for arm in ARMS:
             w, gamma, fallback = arm_weights(arm, i, scores, p, ac)
             theta = theta_i if w is None else aggregate(thetas, i, w, gamma)
+            if w is not None:
+                mixtures[arm] = theta
             traj = trajectory(theta, f"adapt:{arm}")
             if arm == "local-only":
                 local_traj = traj
@@ -169,14 +175,17 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
         for j, sc in scores.items():
             e = np.zeros(K)
             e[j] = 1.0
-            traj = trajectory(aggregate(thetas, i, e, ac["gamma"]), f"candidate:{clients[j]['id']}")
+            singles[clients[j]["id"]] = aggregate(thetas, i, e, ac["gamma"])
+            traj = trajectory(singles[clients[j]["id"]], f"candidate:{clients[j]['id']}")
             rows(out["candidates"], ("donor", clients[j]["id"]), traj)
             U1 = local_traj[u_fold][0]["rmse"] - traj[u_fold][0]["rmse"]
             U2 = local_traj[u_fold][main_b]["rmse"] - traj[u_fold][main_b]["rmse"]
             for name in ["W_H", "W_C", "s", "rate", "S", "Q"]:
                 out["scores"].append({"seed": seed, "receiver": rec["id"], "donor": clients[j]["id"],
                                       "score": name, "value": sc[name], "U_t1": U1, "U_t2": U2,
-                                      "U_fold": u_fold, "Q_source": sc["Q_source"]})
+                                      "U_fold": u_fold, "Q_source": sc["Q_source"],
+                                      "same_group": bool(groups[j] == groups[i])})
+        out["geometry"] += geometry.mixture_rows(seed, rec["id"], thetas, i, mixtures, singles)
         if headroom:
             t = time.perf_counter()
             ref = reference_losses(theta0, d, rec, view, st, cfg, _seed(seed, 40, i))

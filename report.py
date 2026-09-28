@@ -16,7 +16,7 @@ from scipy.stats import kendalltau
 
 from kernel import aggregate, donor_weights
 from loop import ARMS
-from report_tables import (_md, averaging_harm, compute_md, contrasts_md, fallback_md,
+from report_tables import (_jsonable, _md, _pairs, averaging_harm, compute_md, contrasts_md, fallback_md,
                            recovery_md, selection_md)
 
 SCORES = ["W_H", "W_C", "s", "rate", "S", "Q"]
@@ -49,24 +49,9 @@ def write_csvs(out_dir, outs):
     """metrics.csv and scores.csv are deterministic per seed; candidates.csv too.
     compute.csv holds wall-clock seconds, so it is not."""
     os.makedirs(out_dir, exist_ok=True)
-    for key in ["metrics", "scores", "candidates", "compute"]:
+    for key in ["metrics", "scores", "candidates", "compute", "geometry"]:
         (t,) = frames(outs, (key,))
         t.to_csv(os.path.join(out_dir, f"{key}.csv"), index=False, float_format="%.10g")
-
-
-def _jsonable(x):
-    if isinstance(x, dict):
-        return {k: _jsonable(v) for k, v in x.items()}
-    if isinstance(x, np.ndarray):
-        return x.tolist()
-    return x
-
-
-def _pairs(A, names, k, largest=True):
-    iu = np.triu_indices(len(A), 1)
-    order = np.argsort(A[iu])
-    order = order[::-1][:k] if largest else order[:k]
-    return ", ".join(f"{names[iu[0][o]]}-{names[iu[1][o]]}={A[iu][o]:.3f}" for o in order)
 
 
 def _mean_sd(g):
@@ -86,6 +71,7 @@ def build_report(cfg, name, df, roles, dropped, outs):
     m_all, s, w, h, cand, comp = frames(outs, ("metrics", "scores", "weights", "headroom",
                                                "candidates", "compute"))
     fold = "test" if "test" in set(m_all.fold) else "val"
+    e1m = cfg.get("e1m")
     m = m_all[m_all.fold == fold]
     feats, inj, cc, ac, mc = roles["features"], cfg["injection"], cfg["clients"], cfg["aggregation"], cfg["model"]
     first = outs[0]["params"]
@@ -100,15 +86,21 @@ def build_report(cfg, name, df, roles, dropped, outs):
           f"{cc['split']} (train/val/test) drawn per run seed; seeds {cfg['seeds']}.",
           f"- Training-fold sizes, seed {cfg['seeds'][0]}: "
           + "; ".join(f"{c} {v['n_train']}" for c, v in first.items()),
-          f"- Missingness asymmetry: as receiver, a client orders its group's rarely-ordered panels at "
-          f"{cc['receiver_p_rare']} instead of {cc['p_rare']} (mask re-injected, same random draws); "
-          "sizes unchanged.",
+          (f"- E1M: no receiver asymmetry; rows and splits identical to E1 for each seed."
+           if e1m else
+           f"- Missingness asymmetry: as receiver, a client orders its group's rarely-ordered panels at "
+           f"{cc['receiver_p_rare']} instead of {cc['p_rare']} (mask re-injected, same random draws); "
+           "sizes unchanged."),
           f"- Native NaNs before injection: {int(df.isna().sum().sum())} (asserted zero at download).", ""]
 
     mk = [feats[i] for i in roles["maskable"]]
+    panel_txt = (f"E1M condition ({e1m['condition']}), mechanism `{e1m['mechanism']}`: group 0 pairs "
+                 f"{e1m['pi_A']}, group 1 pairs {e1m['pi_B']}, shared singleton {e1m['singleton']}; every "
+                 f"panel ordered with p = {e1m['p']:.4f}; exact counts per fold; correlation-matching "
+                 f"|diff| {e1m['corr_diff']:.3f}." if e1m else
+                 "Panels: " + ", ".join(f"P{k}={[feats[i] for i in P]}" for k, P in enumerate(roles["panels"])))
     L += ["## 2. Missingness injection", "",
-          f"Maskable columns (identical for every client): {mk}. Panels: "
-          + ", ".join(f"P{k}={[feats[i] for i in P]}" for k, P in enumerate(roles["panels"])), "",
+          f"Maskable columns (identical for every client): {mk}. " + panel_txt, "",
           "| client | group | mechanism | panel ordering profile | driver_overlap | class_spread | direction "
           "| realised rate (maskable) | mean lift | mean phi |", "|---|---|---|---|---|---|---|---|---|---|"]
     for c, v in first.items():
@@ -117,13 +109,19 @@ def build_report(cfg, name, df, roles, dropped, outs):
         iu = np.triu_indices(len(idx), 1)
         rr = np.outer(r, r)[iu]
         lift = np.mean(H[iu][rr > 0] / rr[rr > 0]) if (rr > 0).any() else float("nan")
-        L.append(f"| {c} | {v['group']} | {inj['mechanism']} | {np.round(v['profile'], 2).tolist()} | "
+        L.append(f"| {c} | {v['group']} | {inj['mechanism']} | "
+                 f"{np.round(v['profile'], 2).tolist() if v['profile'] is not None else 'matched p'} | "
                  f"{inj['driver_overlap']} | {inj['class_spread']} | {inj['direction']} | "
                  f"{r.mean():.3f} | {lift:.2f} | {C[iu].mean():.3f} |")
-    L += ["", f"Mechanism `{inj['mechanism']}` with driver_overlap {inj['driver_overlap']}: each panel is "
-          "ordered or skipped as a block; the skip probability follows each client's panel profile, and "
-          "panels share part of their skip driver in proportion to driver_overlap, so gaps travel together "
-          "within panels and partly across them. Seed and realised values above are for the first run seed.", ""]
+    if not e1m:
+        L += ["", f"Mechanism `{inj['mechanism']}` with driver_overlap {inj['driver_overlap']}: each panel is "
+              "ordered or skipped as a block; the skip probability follows each client's panel profile, and "
+              "panels share part of their skip driver in proportion to driver_overlap, so gaps travel "
+              "together within panels and partly across them. Seed and realised values above are for the "
+              "first run seed.", ""]
+    else:
+        L += ["", "Clients differ only in which features go missing together; per-feature rates are "
+              "matched by exact counts. Seed and realised values above are for the first run seed.", ""]
 
     L += ["## 3. Computed parameters per client", "",
           f"First run seed, unshrunk clients. Full matrices: `params/<client>.json`. "
