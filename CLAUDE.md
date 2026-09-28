@@ -1020,3 +1020,65 @@ jointly (plausible on wine and protein, not on kin8nm).
   missingness representations are being compared, the predictor stays the
   mask-aware MLP of §1, so any difference between arms comes from the weights,
   not from the model.
+
+## 16. Correction study (exploratory; declared before it runs)
+
+A review found three setup issues. E1 and E1M are **not** overwritten: their
+runs, reports and records above stand as run. This study re-runs them with
+corrections, as an **exploratory** study. Scores, model, aggregation
+hyperparameters, seeds, arms and the ±2 % criterion are unchanged. No
+attention, whole-panel scores or GNN are added.
+
+**Issue 1 — exact-duplicate records.** Rows with identical feature vector and
+target: wine 460/1599 rows in a duplicate group (240 surplus copies, 15.0 %),
+protein 3162/45730 (1711, 3.7 %), concrete 36/1030 (25, 2.4 %), kin8nm 0.
+Under E1's assignment (seed 11) wine had 200 of 220 duplicate groups split
+across locations, 53 with one copy in a test fold and another in training or
+design data (protein 381, concrete 4). **Correction:** every duplicate group
+stays entirely within one location — design split, client, and train / val /
+test. The assignment follows E1's random draws exactly; a group goes wherever
+its first-visited member would have gone, so with no duplicates (kin8nm) the
+assignment is identical to E1's. Report the rate and the rows moved.
+
+**Issue 2 — incompatible preprocessing coordinates.** Each client
+standardised its inputs with its own training-fold statistics, so a donor's
+parameters were applied to inputs in the receiver's coordinates. That
+mismatch works against collaboration and applies equally to every mixing arm
+(all of them mix donor parameters). **Correction — a simulation assumption:**
+one frozen standardisation shared by all clients (median / IQR per feature,
+target mean / std), estimated from the design split only. A
+deployment-compatible version (e.g. federated estimation) is later work. AUC
+keeps binarising at each receiver's training-fold median.
+
+**Issue 3 — target-dependent maskable assignment.** The maskable half is the
+least target-correlated half. **Control added, declared now:** the maskable
+features are the first `floor(d_live/2)` of the non-constant features after
+the fixed permutation `numpy.random.default_rng(2026).permutation`; the
+rest are always observed. Panels, E1M partitions and bin edges then follow
+the same target-free rules as before, on the design rows. Same maskable
+count, same missingness budget. **Both assignments are run and reported**;
+neither is chosen afterwards.
+
+**Survival criteria, declared before the run.** Per dataset and assignment:
+
+- **(a) score arms vs `uniform-donor`** survives if every contrast (6 arms ×
+  t1 / t2; in E1M also × 3 conditions) stays **negligible** (whole interval
+  inside ±2 %).
+- **(b) mixing vs `local-only`** survives if, at t2, the δ decision
+  (meaningful better / negligible / unresolved / meaningful worse) of
+  `fedavg`, of `uniform-donor` and of each score arm is **unchanged**.
+  Estimates are shown side by side regardless.
+
+**Expectation recorded by the user before the run:** (a) survives, because a
+confound acting equally on both sides of a contrast cannot manufacture
+equivalence within it, and E1M's effects are ±0.00–0.04 %; (b) may not,
+especially on wine.
+
+**Functional comparison (replaces the parameter-distance argument; parameter
+distance stays as a secondary observation).** On each receiver's test
+inputs, in the shared coordinates: the RMS difference between the
+predictions of every pair of client local models; and, before (t1) and after
+(t2) adaptation, the RMS difference between each arm's predictions and the
+`uniform-donor` mixture's, and each single-donor mix's. All are reported in
+target units and relative to the receiver's `local-only` test RMSE.
+
