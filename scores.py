@@ -37,6 +37,21 @@ def w_c(C_i, J_j):
     return _weighted_coverage(np.maximum(C_i, 0.0), J_j)
 
 
+def w_marginal(r_i, r_j):
+    """W_marg(i<-j) = sum_f r_i[f] (1 - r_j[f]) / sum_f r_i[f].
+
+    The marginal analogue of W_H: same functional form, marginal availability
+    instead of joint. "The donor observes the features the receiver lacks",
+    using per-feature rates only - no pairwise information. Directed, [0, 1].
+    It is the matched comparator that isolates what pairwise coverage adds.
+    """
+    r_i, r_j = np.asarray(r_i, float), np.asarray(r_j, float)
+    den = r_i.sum()
+    if den <= 0:
+        return None, False
+    return float((r_i * (1.0 - r_j)).sum() / den), True
+
+
 def _cosine_similarity(a, b):
     na, nb = np.linalg.norm(a), np.linalg.norm(b)
     if na == 0 or nb == 0:

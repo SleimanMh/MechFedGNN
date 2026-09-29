@@ -50,3 +50,9 @@ dataset_overrides:
     headroom:
       early_stopping:
         max_steps: 20000   # 5000 truncated both references (best step ~4700)
+
+# E5 - population compatibility (docs/PROTOCOL_E5.md). Declared before running.
+e5:
+  dev_seeds:  [2, 3, 5]
+  eval_seeds: [211, 223, 227, 229, 233, 239, 241, 251, 257, 263]   # disjoint from E1/E1M
+  conditions: [P0M0, P0M1, P1M0, P1M1]

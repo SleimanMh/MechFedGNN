@@ -61,7 +61,7 @@ def test_run_seed_with_matched_builder_logs_geometry_and_groups(tmp_path):
     uni = geo[(geo.kind == "arm") & (geo.a == "uniform-donor")]
     assert fed.to_centroid.max() < 0.05 * uni.to_centroid.min()   # near-equal sizes: fedavg ~ the centroid
     sc = pd.DataFrame(outs[0]["scores"])
-    assert sc.groupby(["receiver"])["same_group"].sum().eq(6).all()   # 1 same-group donor x 6 scores
+    assert sc.groupby(["receiver"])["same_group"].sum().eq(8).all()   # 1 same-group donor x 8 scores
     cfg["e1m"] = {"condition": "b", "mechanism": "mcar", "pi_A": ["x"], "pi_B": ["y"], "singleton": None,
                   "p": 0.7, "corr_diff": 0.0}
     out = write_run("t", cfg, "syn", df, roles, [], outs, root=str(tmp_path))

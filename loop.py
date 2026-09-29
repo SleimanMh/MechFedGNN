@@ -18,13 +18,16 @@ from headroom import headroom_row, reference_losses
 import geometry
 from kernel import aggregate, donor_weights
 from model import Standardiser, init_params, metrics, predict, train
-from scores import combined_q, missingness_similarity, rate_similarity, w_c, w_h
+from scores import combined_q, missingness_similarity, rate_similarity, w_c, w_h, w_marginal
 from signatures import histograms, population_similarity, signature
 
 ARMS = ["local-only", "fedavg", "uniform-donor", "marginal-rate", "missingness-similarity",
         "coverage-W_H", "coverage-W_C", "population-S", "combined-Q"]
 SCORE_OF_ARM = {"marginal-rate": "rate", "missingness-similarity": "s", "coverage-W_H": "W_H",
-                "coverage-W_C": "W_C", "population-S": "S", "combined-Q": "Q"}
+                "coverage-W_C": "W_C", "population-S": "S", "combined-Q": "Q",
+                "coverage-marginal": "W_marg", "combined-Q-marginal": "Q_marg"}
+E5_ARMS = ["local-only", "fedavg", "uniform-donor", "coverage-marginal", "coverage-W_H",
+           "population-S", "combined-Q", "combined-Q-marginal"]
 NONDISCRIM_TOL = 1e-9   # scores equal within this give no basis for distinguishing donors (§7.1)
 
 
@@ -62,10 +65,13 @@ def _seed(*parts):
     return int(np.random.default_rng(list(parts)).integers(2**31 - 1))
 
 
-def summaries(c, roles):
+def summaries(c, roles, exclude=()):
+    """`exclude`: column indices dropped from the S characteristics (E5's
+    robustness configuration drops the partition characteristic)."""
     tr = c["train"]
-    names = [roles["features"][i] for i in roles["always_observed"]]
-    hist = histograms(c["X"][tr][:, roles["always_observed"]], names, roles["bin_edges"])
+    cols = [i for i in roles["always_observed"] if i not in set(exclude)]
+    names = [roles["features"][i] for i in cols]
+    hist = histograms(c["X"][tr][:, cols], names, roles["bin_edges"])
     return {"sig": signature(c["M"][tr]), "hist": hist, "n_train": len(tr)}
 
 
@@ -76,8 +82,11 @@ def pair_scores(si, sj, lam_pop):
     s, _ = missingness_similarity(si["sig"]["C"], sj["sig"]["C"])
     rate, _ = rate_similarity(si["sig"]["r"], sj["sig"]["r"])
     S = population_similarity(si["hist"], sj["hist"])
+    WM, _ = w_marginal(si["sig"]["r"], sj["sig"]["r"])
     Q, source = combined_q(WH, S, lam_pop)
-    return {"W_H": WH, "W_C": WC, "s": s, "rate": rate, "S": S, "Q": Q, "Q_source": source}
+    QM, source_m = combined_q(WM, S, lam_pop)
+    return {"W_H": WH, "W_C": WC, "s": s, "rate": rate, "S": S, "Q": Q, "Q_source": source,
+            "W_marg": WM, "Q_marg": QM, "Q_marg_source": source_m}
 
 
 def arm_weights(arm, i, scores, p, ac):
@@ -121,6 +130,8 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
     budgets = sorted(set([0] + list(budgets if budgets is not None else [mc["adapt_budget"]])))
     main_b = budgets[-1]
     clients, groups = builder(seed) if builder else build_clients(df, roles, cfg, seed)
+    arms = cfg.get("arms") or ARMS
+    s_exclude = tuple((cfg.get("e5") or {}).get("s_exclude", ()))
     K, d = len(clients), len(roles["features"])
     hidden = tuple(mc["hidden"])
     theta0 = init_params(d, _seed(seed, 10), hidden)
@@ -141,7 +152,7 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
         return theta, st
 
     local_full = [fit_local(c, 20, "-")[0] for c in clients]
-    summ_full = [summaries(c, roles) for c in clients]
+    summ_full = [summaries(c, roles, s_exclude) for c in clients]
     out["params"] = {c["id"]: {**summ_full[k], "group": int(groups[k]), "profile": c.get("profile")}
                      for k, c in enumerate(clients)}
     out["geometry"] += geometry.client_rows(seed, local_full, theta0, [c["id"] for c in clients])
@@ -150,7 +161,7 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
         rec = full if builder else asymmetric_receiver(full, roles, cfg, seed)
         theta_i, st = fit_local(rec, 21, rec["id"])
         view = clients[:i] + [rec] + clients[i + 1:]
-        summ = summ_full[:i] + [summaries(rec, roles)] + summ_full[i + 1:]
+        summ = summ_full[:i] + [summaries(rec, roles, s_exclude)] + summ_full[i + 1:]
         sizes = np.array([s["n_train"] for s in summ], float)
         p = sizes / sizes.sum()
         scores = {j: pair_scores(summ[i], summ[j], ac["lambda_pop"]) for j in range(K) if j != i}
@@ -184,7 +195,7 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
                                        "value": m[metric], "pos_rate": m["pos_rate"], **extra})
 
         local_traj, mixtures, singles = None, {}, {}
-        for arm in ARMS:
+        for arm in arms:
             w, gamma, fallback = arm_weights(arm, i, scores, p, ac)
             theta = theta_i if w is None else aggregate(thetas, i, w, gamma)
             if w is not None:
@@ -207,7 +218,7 @@ def run_seed(df, roles, cfg, seed, folds=("val", "test"), budgets=None, headroom
             rows(out["candidates"], ("donor", clients[j]["id"]), traj)
             U1 = local_traj[u_fold][0]["rmse"] - traj[u_fold][0]["rmse"]
             U2 = local_traj[u_fold][main_b]["rmse"] - traj[u_fold][main_b]["rmse"]
-            for name in ["W_H", "W_C", "s", "rate", "S", "Q"]:
+            for name in ["W_H", "W_C", "s", "rate", "S", "Q", "W_marg", "Q_marg"]:
                 out["scores"].append({"seed": seed, "receiver": rec["id"], "donor": clients[j]["id"],
                                       "score": name, "value": sc[name], "U_t1": U1, "U_t2": U2,
                                       "U_fold": u_fold, "Q_source": sc["Q_source"],

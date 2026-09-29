@@ -84,3 +84,41 @@ def test_random_maskable_assignment_is_target_independent():
     df2["target"] = -df2["f0"] * 10                                 # completely different target
     r2 = build_roles(df2, maskable_mode="random")
     assert r1["maskable"] == r2["maskable"] and len(r1["maskable"]) == len(build_roles(df)["maskable"])
+
+
+# ---------------------------------------------------------------- E5 (docs/PROTOCOL_E5.md)
+
+def test_w_marginal_matches_hand_computation_and_is_directed():
+    from scores import w_marginal
+    r_i, r_j = np.array([0.5, 0.0, 0.25]), np.array([0.1, 0.4, 0.0])
+    v, ok = w_marginal(r_i, r_j)
+    assert ok and v == pytest.approx((0.5 * 0.9 + 0.0 * 0.6 + 0.25 * 1.0) / 0.75)
+    assert w_marginal(r_j, r_i)[0] != pytest.approx(v)                  # directed
+    assert w_marginal(np.zeros(3), r_j) == (None, False)                # receiver lacks nothing
+
+
+def test_m0_preserves_per_feature_counts_and_destroys_association():
+    from data.e5 import inject_panels_exact, permute_columns
+    panels, maskable = [[0, 1], [2, 3]], [0, 1, 2, 3]
+    rng = np.random.default_rng(0)
+    m1 = inject_panels_exact(600, 5, panels, np.array([0.2, 0.9]), 0.05, rng)
+    m0 = permute_columns(m1, maskable, np.random.default_rng(1))
+    np.testing.assert_array_equal((m1 == 0).sum(0), (m0 == 0).sum(0))    # exact count match
+    within = lambda M: np.corrcoef(1 - M[:, 0], 1 - M[:, 1])[0, 1]
+    assert within(m1) > 0.6 and abs(within(m0)) < 0.15
+    assert (m1[:, 4] == 1).all() and (m0[:, 4] == 1).all()               # never-masked untouched
+
+
+def test_partition_column_is_target_free_and_follows_the_declared_rule():
+    from data.e5 import partition_column
+    df = _df_with_dups()
+    roles = build_roles(df)
+    a = partition_column(df, roles)
+    df2 = df.copy()
+    df2["target"] = -100 * df2["f0"]
+    assert partition_column(df2, roles) == a          # same roles, different target -> same column
+    assert a in roles["always_observed"]              # reliably observed (never masked)
+    design, _ = design_split(len(df), groups=None)
+    X = df[roles["features"]].to_numpy(float)[design]
+    nuniq = {i: len(np.unique(X[:, i])) for i in roles["always_observed"]}
+    assert nuniq[a] == max(nuniq.values())            # most distinct values, as declared
