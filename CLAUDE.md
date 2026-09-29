@@ -1082,3 +1082,26 @@ predictions of every pair of client local models; and, before (t1) and after
 `uniform-donor` mixture's, and each single-donor mix's. All are reported in
 target units and relative to the receiver's `local-only` test RMSE.
 
+### 16.1 Corrected E1M on concrete and wine: VOID (accepted)
+
+Under the corrections, the E1M rate tolerance (§10: `max |r_i,f − r_j,f| ≤ 0.01`
+on **every** fold) fails on concrete and wine: validation / test folds reach
+**0.0203 / 0.0220**, while training folds stay within tolerance (≤ 0.0076).
+**These cells are VOID and are not run.** kin8nm and protein carry E1M; they
+also have the cleanest correlation matching (|diff| 0.002–0.093 vs wine 0.30).
+
+*Diagnosis.* With exact per-fold counts, a client's realised rate moves in
+steps of one row, so the spread across clients is of order `1/n_fold`.
+Duplicate relocation leaves the small folds **unequal** — concrete
+validation 43/47/44/49 rows (1/n = 0.020–0.023, realised spread 0.0203),
+wine test 75/66/70/74 (0.013–0.015, spread 0.0188) — whereas training folds
+(129–224 rows) and kin8nm's equal folds (no duplicates, spread 0.0000) stay
+inside. The cause is fold-size granularity, not a defect in the matched
+construction: the masks the **scores** see (training folds) are matched
+throughout.
+
+*Candidate rule for future work, explicitly NOT applied here:* restrict the
+tolerance to training folds, since those are the only masks any score reads.
+It is recorded as a candidate precisely because it became visible only when
+it would have rescued failing cells — which is what the pre-declaration
+exists to prevent. Applying it to these runs would be a post-hoc change.
