@@ -6,7 +6,7 @@ fixed report sections - no new sections.
 import numpy as np
 import pandas as pd
 
-from loop import ARMS
+from loop import ARMS_ORDER
 from stats import (DELTA_PCT, compute_by_arm, contrast_table, decide, group_recovery, paired,
                    seed_interval, selected_candidate)
 
@@ -36,11 +36,12 @@ def _pairs(A, names, k, largest=True):
     return ", ".join(f"{names[iu[0][o]]}-{names[iu[1][o]]}={A[iu][o]:.3f}" for o in order)
 
 
-def averaging_harm(m):
+def averaging_harm(m, arms=None):
     """E1 primary question (CLAUDE.md §10): harm from indiscriminate averaging.
     Per receiver: local-only - fedavg and local-only - uniform-donor (RMSE;
     negative = the averaging arm is worse). Per arm: receivers and
     receiver-seeds it harms relative to local-only."""
+    arms = arms or [a for a in ARMS_ORDER if a in set(m.arm)]
     r = m[m.metric == "rmse"]
     L = ["**Harm from averaging, per receiver** (RMSE, mean over seeds; negative = worse than local-only)", ""]
     rows = []
@@ -53,7 +54,7 @@ def averaging_harm(m):
         rows.append(row)
     L += [pd.DataFrame(rows).round(4).pipe(_md, index=False), ""]
     counts = []
-    for arm in [a for a in ARMS if a != "local-only"]:
+    for arm in [a for a in arms if a != "local-only"]:
         row = {"arm": arm}
         for tp in ["t1", "t2"]:
             g = r[r.timepoint == tp].pivot_table(index=["seed", "receiver"], columns="arm", values="value")
@@ -117,4 +118,5 @@ def compute_md(comp, K):
         return []
     return ["**Compute** (mean per receiver-seed; examples = steps × min(batch, n_train); "
             "a mixing arm includes the local training of every client it mixes). Identical "
-            "stopping rules are not equal compute:", "", compute_by_arm(comp, K).round(1).pipe(_md, index=False), ""]
+            "stopping rules are not equal compute:", "", compute_by_arm(comp, K, sorted(set(comp.component[comp.component.str.startswith("adapt:")].str.slice(6)),
+                                          key=lambda a: ARMS_ORDER.index(a) if a in ARMS_ORDER else 99)).round(1).pipe(_md, index=False), ""]

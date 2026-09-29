@@ -139,8 +139,9 @@ essential control — if `Q_H` improves, it says whether pairwise information
 contributes beyond marginal availability plus population similarity.
 
 `λ_pop = 0.5` fixed; **no tuning sweep**. Self-weight (γ = 0.5), local budget
-(300 steps), adaptation budget (10 steps) and donor participation are identical
-across all score arms and `uniform-donor`. `marginal-rate`,
+and adaptation budget (**200 and 10 steps**, chosen in Stage B by the declared
+method-agnostic rule below) and donor participation are identical across all
+score arms and `uniform-donor`. `marginal-rate`,
 `missingness-similarity` and `coverage-W_C` from E1 are **not** run in E5: they
 do not serve these comparisons and would add multiplicity.
 
@@ -181,6 +182,22 @@ validation-selected donor diagnostic. Test-measured donor utilities stay
   `[2, 3, 5]`**, training/validation only. Numerical stability, training
   progress, runtime, and a learning curve to pick the training budget. The
   budget is **not** chosen to maximise separation between methods.
+
+  *Rule, declared before the curves were read:* `local_steps` = the smallest
+  grid point whose mean validation RMSE of **local-only** is within 1 % of that
+  curve's minimum; `adapt_budget` = the same rule applied to the
+  **uniform-donor control**. Each dataset's curve is normalised by its own best
+  before averaging. Neither curve involves a score arm, so the budget cannot be
+  chosen to favour one. **Result: `local_steps = 200`, `adapt_budget = 10`**
+  (both interior to their grids; `adapt_budget` coincides with E1's
+  independently chosen value).
+
+  *Two corrections made during Stage B, both before any test fold was touched:*
+  the grids were extended once because the first pass selected their
+  boundaries; and an aggregation bug was fixed — the local curve had been
+  normalised by the maximum **across datasets at each step** instead of by each
+  dataset's own minimum **across steps**, which made the average track the
+  wine/concrete scale ratio and spuriously select the smallest budget.
 - **Stage C — frozen evaluation.** Concrete, Wine, kin8nm, Protein.
   **Evaluation seeds `[211, 223, 227, 229, 233, 239, 241, 251, 257, 263]`** —
   disjoint from E1/E1M's seeds and from the development seeds. Protocol and

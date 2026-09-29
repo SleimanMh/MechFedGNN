@@ -16,7 +16,7 @@ from scipy.spatial.distance import squareform
 from scipy.stats import t as student_t
 from sklearn.metrics import adjusted_rand_score
 
-from loop import ARMS
+from loop import ARMS, ARMS_ORDER
 from scores import missingness_similarity, rate_similarity
 from signatures import population_similarity
 
@@ -64,8 +64,9 @@ def decide(lo, hi, delta=DELTA_PCT):
 
 def contrast_table(m, fold="test", timepoint="t2", delta=DELTA_PCT):
     tab = rmse_table(m, fold, timepoint)
+    present = set(tab.columns)
     rows = []
-    for arm, comp in CONTRASTS:
+    for arm, comp in [(a, b) for a, b in CONTRASTS if a in present and b in present]:
         ci = seed_interval(paired(tab, arm, comp))
         rows.append({"arm": arm, "vs": comp, **ci, "decision": decide(ci["lo"], ci["hi"], delta)})
     return pd.DataFrame(rows)
@@ -113,14 +114,15 @@ def group_recovery(params_by_seed, groups_key="group"):
     return pd.DataFrame(rows).groupby("score")["ari"].agg(["mean", "min", "max"])
 
 
-def compute_by_arm(comp, K):
+def compute_by_arm(comp, K, arms=None):
     """Mean optimiser steps / examples / seconds per receiver-seed, per arm.
     local-only: receiver's local training + adaptation. Mixing arms: the local
     training of every client mixed (K - 1 full donors + the receiver) + adaptation."""
     c = comp.copy()
+    arms = arms or ARMS
     donors = c[c.receiver == "-"].groupby("seed")[["steps", "examples", "seconds"]].sum() * (K - 1) / K
     rows = []
-    for arm in ARMS:
+    for arm in arms:
         a = c[c.component == f"adapt:{arm}"].set_index(["seed", "receiver"])[["steps", "examples", "seconds"]]
         own = c[c.component.str.startswith("local:") & (c.receiver != "-")].set_index(
             ["seed", "receiver"])[["steps", "examples", "seconds"]]

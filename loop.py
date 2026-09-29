@@ -28,6 +28,7 @@ SCORE_OF_ARM = {"marginal-rate": "rate", "missingness-similarity": "s", "coverag
                 "coverage-marginal": "W_marg", "combined-Q-marginal": "Q_marg"}
 E5_ARMS = ["local-only", "fedavg", "uniform-donor", "coverage-marginal", "coverage-W_H",
            "population-S", "combined-Q", "combined-Q-marginal"]
+ARMS_ORDER = ARMS + [a for a in E5_ARMS if a not in ARMS]   # display order across experiments
 NONDISCRIM_TOL = 1e-9   # scores equal within this give no basis for distinguishing donors (§7.1)
 
 

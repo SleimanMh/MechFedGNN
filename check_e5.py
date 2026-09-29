@@ -62,7 +62,7 @@ def main():
     ap.add_argument("--assignment", default="corr")
     args = ap.parse_args()
     base = yaml.safe_load(open("configs/defaults.yaml"))
-    seeds = args.seeds or base["e5"]["eval_seeds"]
+    seeds = args.seeds or base["e5_plan"]["eval_seeds"]
     verdicts = []
     for name in args.datasets or base["datasets"]:
         df, _ = load_dataset(name, verbose=False)

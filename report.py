@@ -15,7 +15,7 @@ import pandas as pd
 from scipy.stats import kendalltau
 
 from kernel import aggregate, donor_weights
-from loop import ARMS
+from loop import ARMS_ORDER
 from report_tables import (_jsonable, _md, _pairs, averaging_harm, compute_md, contrasts_md, fallback_md,
                            recovery_md, selection_md)
 
@@ -70,8 +70,10 @@ def fedavg_limit_ok():
 def build_report(cfg, name, df, roles, dropped, outs):
     m_all, s, w, h, cand, comp = frames(outs, ("metrics", "scores", "weights", "headroom",
                                                "candidates", "compute"))
+    arms = [a for a in ARMS_ORDER if a in set(m_all.arm)]
     fold = "test" if "test" in set(m_all.fold) else "val"
     e1m = cfg.get("e1m")
+    e5c = cfg.get("e5")
     m = m_all[m_all.fold == fold]
     feats, inj, cc, ac, mc = roles["features"], cfg["injection"], cfg["clients"], cfg["aggregation"], cfg["model"]
     first = outs[0]["params"]
@@ -86,7 +88,12 @@ def build_report(cfg, name, df, roles, dropped, outs):
           f"{cc['split']} (train/val/test) drawn per run seed; seeds {cfg['seeds']}.",
           f"- Training-fold sizes, seed {cfg['seeds'][0]}: "
           + "; ".join(f"{c} {v['n_train']}" for c, v in first.items()),
-          (f"- E1M: no receiver asymmetry; rows and splits identical to E1 for each seed."
+          (f"- E5 {e5c['condition']} ({'heterogeneous' if e5c['P'] else 'approximately random'} "
+           f"populations, {'structured panel' if e5c['M'] else 'independent cell'} masking); "
+           f"S configuration `{e5c['s_config']}`, partition characteristic "
+           f"{e5c['partition_characteristic']}; no receiver asymmetry."
+           if e5c else
+           f"- E1M: no receiver asymmetry; rows and splits identical to E1 for each seed."
            if e1m else
            f"- Missingness asymmetry: as receiver, a client orders its group's rarely-ordered panels at "
            f"{cc['receiver_p_rare']} instead of {cc['p_rare']} (mask re-injected, same random draws); "
@@ -192,7 +199,7 @@ def build_report(cfg, name, df, roles, dropped, outs):
               + ": indiscriminate pooling is worse than local there, beyond sampling noise.", ""]
     for metric in ["rmse", "mae", "auc"]:
         rows = []
-        for arm in ARMS:
+        for arm in arms:
             row = {"arm": arm}
             for tp in ["t1", "t2"]:
                 g = m[(m.metric == metric) & (m.arm == arm) & (m.timepoint == tp)]
@@ -209,8 +216,8 @@ def build_report(cfg, name, df, roles, dropped, outs):
     per = r2.copy()
     per["mean"], per["worst"] = r2.mean(1), r2.max(1)
     per["frac_harmed"] = (delta > 0).mean(1)
-    L += ["**Per-receiver RMSE, timepoint 2** (mean over seeds)", "", per.loc[ARMS].round(4).pipe(_md), ""]
-    L += averaging_harm(m)
+    L += ["**Per-receiver RMSE, timepoint 2** (mean over seeds)", "", per.loc[arms].round(4).pipe(_md), ""]
+    L += averaging_harm(m, arms)
     L += contrasts_md(m_all, fold)
     L += selection_md(m_all, cand, fold)
     u = s[s.score == "W_H"].groupby(["receiver", "donor"])[["U_t1", "U_t2"]].mean()
