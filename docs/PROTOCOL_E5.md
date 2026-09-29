@@ -258,3 +258,67 @@ proposed score prefers a particular donor.**
   alignment was weak.
 - **Effects appear only in the primary `S` configuration** (not the robustness
   one): reported clearly as dependence on privileged information.
+
+---
+
+## 12. Outcome (recorded 2026-09-29; `results/e5/analysis.txt`, 32 runs)
+
+Construction checks passed on all 16 dataset × condition cells (0 count
+mismatches, 0 duplicate groups split). Stage A and Stage B passed; budget
+frozen at `local_steps = 200`, `adapt_budget = 10`.
+
+**All 320 primary contrasts are negligible** — 160 at t1 and 160 at t2, every
+95 % interval inside ±2 %, and in fact inside ±0.7 %. This holds in both `S`
+configurations and in all four conditions.
+
+By comparison (all t2, primary `S`):
+
+| Comparison | Result |
+|---|---|
+| `Q_H` vs `W_H` — does `S` add value? | negligible everywhere (−0.23 … +0.14 %) |
+| `Q_H` vs `S` — does coverage add value? | negligible everywhere (−0.06 … +0.14 %) |
+| `Q_H` vs `Q_marg` — **does pairwise add beyond marginal + `S`?** | negligible everywhere (−0.15 … +0.02 %) |
+| `S` vs `uniform-donor` — does the population signal help? | negligible in all 32 cells (−0.03 … +0.05 %) |
+| `Q_H` vs `uniform-donor` — does the combined method help? | negligible everywhere (−0.07 … +0.16 %) |
+
+**This is the "no method improves meaningfully" branch of §11.** Per that
+branch, we identify which precondition was weak:
+
+- **Population shift: NOT weak.** `S`'s score range across donors rises from
+  0.004–0.031 (P0) to 0.113–0.363 (P1), and its realised weight range from
+  0.001–0.012 to 0.047–0.164. The manipulation did what it was built to do.
+  In the **robustness** configuration that variation collapses (concrete
+  0.149 → 0.052), confirming the partition characteristic was carrying it —
+  yet the prediction result is unchanged in both configurations, so **no
+  effect depends on the privileged information** (there is no effect to
+  depend on it).
+- **Donor opportunity: NOT weak on concrete and wine.** `uniform-donor` beats
+  `local-only` by 3.4–5.3 % on wine (meaningful in all four conditions) and
+  1.5–3.5 % on concrete (unresolved). It is weakly harmful on kin8nm and
+  protein (+0.25 … +0.49 %, harming 25–38 of 40 receiver-seeds).
+- **Score–utility alignment: WEAK.** Top-donor agreement with measured `U` is
+  at or below the 1/3 chance rate (≈ 13/40) in most cells, with Kendall τ near
+  zero or negative — notably kin8nm (τ −0.18 … −0.49 for every score).
+  Exceptions are mild: protein `W_H` 16–22/40 (τ ≈ 0) and wine P1 17–20/40
+  (τ ≈ +0.2).
+- **Weight dispersion is not the bottleneck here.** Unlike E1, the scores do
+  produce non-uniform weights (`W_marg` range ≈ 0.22, `W_H` ≈ 0.23–0.36 of
+  the weight simplex). They simply do not point at donors that help.
+
+**Selector diagnostic.** The validation-selected single donor beats
+`local-only` meaningfully on wine (−2.9 … −5.4 %) but **never** beats
+`uniform-donor` (negligible or unresolved in all 16 cells) — the same pattern
+E1 found.
+
+**Answer to the E5 question.** Under constructed, overlapping population shift
+with value-independent missingness: **population similarity did not improve
+prediction**, and **joint-missingness coverage added nothing beyond marginal
+availability plus population similarity**. The earlier weak result for `S` in
+E1/E1M is therefore not explained by those experiments' homogeneous
+populations — `S` remains ineffective when a real population difference is
+present and `S` can see it directly.
+
+**Scope.** This is a negative result for these scores, this predictor, this
+aggregation rule and these four tabular datasets at K = 4. It does not rule
+out population compatibility as a concept, other predictors, other
+aggregation rules, or learned collaboration methods.
