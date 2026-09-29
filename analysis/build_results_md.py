@@ -82,6 +82,27 @@ def main():
         p = f"results/injector_validation/{name}.txt"
         if os.path.exists(p):
             L += [f"### 8.{3 + E1_ORDER.index(name)} Injector validation — {name}", "", code(read(p)), ""]
+    L += ["## 9. §16 correction study (EXPLORATORY)", "",
+          "Duplicate-group splitting, one frozen shared standardisation, and a target-independent "
+          "maskable-assignment control. Sections 5–7 above are **left exactly as run**; where the "
+          "corrected runs disagree, the superseded claim is flagged in §9.1 and in the banner at the "
+          "top of this file. Declared in `CLAUDE.md` §16 before the runs; criteria (a) and (b) and the "
+          "user's expectation were recorded there in advance.", "",
+          "### 9.1 Survival of each conclusion, functional comparison, geometry", "",
+          code(read("results/correction_study.txt")), "",
+          "### 9.2 Wine decomposition — duplicates vs shared scaler vs the role flip", "",
+          "The f7/f2 role flip is not an independent factor: it is a downstream consequence of "
+          "duplicate grouping changing the design split, hence the |corr(f,target)| ranking on the "
+          "design rows. It is isolated as the D → E step below.", "",
+          code(read("results/wine_decomposition.txt")), "",
+          "### 9.3 Setup: duplicate rates, rows moved, corrected roles, E1M tolerance", "",
+          code(read("results/correction_setup.txt")), "",
+          "### 9.4 Corrected run index", "", "| experiment | dataset | condition | run |", "|---|---|---|---|"]
+    for exp in sorted(glob.glob("results/e1*_corrected_*/")):
+        for r in sorted(glob.glob(exp + "*/")):
+            cfg = json.load(open(os.path.join(r, "config.json")))
+            L.append(f"| {os.path.basename(exp.rstrip('/'))} | {cfg['dataset']} | "
+                     f"{cfg.get('e1m', {}).get('condition', '-')} | `{r.replace(chr(92), '/')}` |")
     os.makedirs("docs", exist_ok=True)
     open(OUT, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print(f"wrote {OUT}: {sum(1 for _ in open(OUT, encoding='utf-8'))} lines")
