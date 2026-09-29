@@ -55,7 +55,15 @@ exactly `round(jitter·n_ordered)` of those lost per member feature.
 client and fold, each column of the M1 mask is permuted independently. This is
 the "independently randomized column arrangement" construction: it preserves
 **per-feature missing counts exactly** (identical to M1, by construction, not
-merely in expectation) and destroys row-level association.
+merely in expectation) and removes imposed cross-column association **in
+expectation**.
+
+> **Correction (2026-09-30).** An earlier wording said permutation "destroys
+> row-level association". It removes it in expectation only; residual
+> empirical association remains at finite n. Measured in M0 (seed 211,
+> training folds): within-panel `C` −0.03 … +0.10 and between-panel −0.08 …
+> +0.11, against +0.63 … +0.95 within-panel in M1. The contrast is large, but
+> M0 is not an exactly-zero-association control.
 
 *Designed consequence, to be verified in the construction checks:* per-feature
 rates `r`, and therefore the marginal-only coverage score `W_marg`, are
@@ -74,7 +82,17 @@ caused by this and the candidate rule that was **not** applied.
 **Partition characteristic — declared rule.** Among the `always_observed`
 features (never masked, hence reliably observed), on the **design rows only**:
 the feature with the most distinct values; ties broken by lowest column index.
-This is **independent of the target**. The existing `partition_col` in
+
+> **Correction (2026-09-30, `docs/E5_DIAGNOSTIC.md` §3).** This rule was
+> described as "independent of the target". The *selection rule* is, but the
+> *eligible set* is not: `always_observed` is the complement of `maskable`,
+> and `maskable` in the `corr` mode used by E5 is the half of features with
+> the **lowest** |corr| with the target — so the eligible set is the
+> high-|corr| half. The accurate description is **a target-free choice
+> conditional on a target-informed eligible set**. On concrete the rule landed
+> on the most target-correlated feature in the dataset (|corr| 0.592, rank 1
+> of 8). This is a wording correction; E5 is not re-run. A genuinely
+> target-free variant exists (`maskable_mode = "random"`). The existing `partition_col` in
 `data/clients.py` picks the always-observed feature most correlated with the
 target and is **not used in E5**.
 
@@ -268,7 +286,10 @@ mismatches, 0 duplicate groups split). Stage A and Stage B passed; budget
 frozen at `local_steps = 200`, `adapt_budget = 10`.
 
 **All 320 primary contrasts are negligible** — 160 at t1 and 160 at t2, every
-95 % interval inside ±2 %, and in fact inside ±0.7 %. This holds in both `S`
+95 % interval inside ±2 %, and in fact inside **±0.81 %** (corrected from an
+earlier "±0.7 %"; the true maximum bound is the interval [−0.56, +0.81]).
+Count verified: 5 comparisons × 4 datasets × 4 conditions × 2 `S` configs × 2
+timepoints = 320, with 16 dataset–condition cells per `S` configuration. This holds in both `S`
 configurations and in all four conditions.
 
 By comparison (all t2, primary `S`):
@@ -322,3 +343,16 @@ present and `S` can see it directly.
 aggregation rule and these four tabular datasets at K = 4. It does not rule
 out population compatibility as a concept, other predictors, other
 aggregation rules, or learned collaboration methods.
+
+---
+
+## 13. Post hoc selection diagnostic
+
+`docs/E5_DIAGNOSTIC.md` (exploratory; existing artefacts only, no retraining)
+separates collaboration benefit from selection benefit and tests whether
+validation can identify a good donor. Headline: a real single-donor
+opportunity exists only on concrete (≈ 2–3 % vs uniform), and there validation
+identifies the best donor only 42–57 % of the time (chance 33 %) despite a
+3.3 % validation gap; where validation is reliable (protein, 72–88 %) the
+opportunity is ≈ 0.2 %. Donor rankings also change across the adaptation step
+in a third to a half of receiver-seeds. It carries the three corrections above.
