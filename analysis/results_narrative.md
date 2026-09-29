@@ -19,11 +19,23 @@
 E1 / E1M run reports and analysis outputs verbatim; section 9 is the §16
 correction study. E1 / E1M runs 2026-09-28, correction study 2026-09-29.*
 
-**Status:** E1 (signal comparison) and E1M (matched-marginal test) are complete.
+**Status:** E1 (signal comparison), E1M (matched-marginal test), the §16
+correction study and **E5 (population compatibility, §10)** are complete.
 E2, E3 and E4 (§15, graph arms) have not been run. The design, decisions and
 their history are in `CLAUDE.md`; this file reports results only.
 
 ## 0. Summary
+
+**E5 (added 2026-09-29, see §10 and `docs/PROTOCOL_E5.md`).** E1/E1M held
+populations homogeneous, so their weak result for `S` did not establish that
+`S` fails under population shift. E5 tested that directly with a factorial
+population x missingness design and a marginal-only coverage control. Result:
+**all 320 primary contrasts negligible** — population similarity did not
+improve prediction even where the shift was real and `S` could see it, and
+pairwise coverage added nothing beyond marginal availability plus `S`. The
+diagnosis is score-utility alignment, not lack of opportunity: collaboration
+itself beats `local-only` by 3.4-5.3 % on wine, but donor rankings agree with
+measured transfer at or below chance.
 
 1. **Score-based donor weighting made no practical difference against equal
    donor weights.** In E1, all 48 score-arm vs `uniform-donor` contrasts have

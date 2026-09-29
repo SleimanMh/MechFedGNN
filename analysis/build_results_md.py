@@ -103,6 +103,23 @@ def main():
             cfg = json.load(open(os.path.join(r, "config.json")))
             L.append(f"| {os.path.basename(exp.rstrip('/'))} | {cfg['dataset']} | "
                      f"{cfg.get('e1m', {}).get('condition', '-')} | `{r.replace(chr(92), '/')}` |")
+    L += ["## 10. E5 — population compatibility under structured missingness", "",
+          "Protocol: `docs/PROTOCOL_E5.md` (written and committed before any E5 evaluation; its §12 "
+          "records the outcome). Factorial P0/P1 x M0/M1, 8 arms including the marginal-only "
+          "coverage control, 10 frozen evaluation seeds disjoint from E1/E1M. **All 320 primary "
+          "contrasts are negligible** (160 at t1, 160 at t2; every interval inside ±2 %).", "",
+          "### 10.1 Construction checks (before training)", "", code(read("results/e5/checks.txt")), "",
+          "### 10.2 Stage A — synthetic sanity check", "", code(read("results/e5/stage_a.txt")), "",
+          "### 10.3 Stage B — development run and budget selection", "",
+          code(read("results/e5/stage_b.txt")), "",
+          "### 10.4 Stage C — frozen evaluation, primary comparisons and diagnostics", "",
+          code(read("results/e5/analysis.txt")), "",
+          "### 10.5 Run index", "", "| dataset | condition | S config | run |", "|---|---|---|---|"]
+    for r in sorted(glob.glob("results/e5_eval_*/*/")):
+        c = json.load(open(os.path.join(r, "config.json")))
+        L.append(f"| {c['dataset']} | {c['e5']['condition']} | {c['e5']['s_config']} | "
+                 f"`{r.replace(chr(92), '/')}` |")
+    L += [""]
     os.makedirs("docs", exist_ok=True)
     open(OUT, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print(f"wrote {OUT}: {sum(1 for _ in open(OUT, encoding='utf-8'))} lines")

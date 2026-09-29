@@ -19,11 +19,23 @@
 E1 / E1M run reports and analysis outputs verbatim; section 9 is the §16
 correction study. E1 / E1M runs 2026-09-28, correction study 2026-09-29.*
 
-**Status:** E1 (signal comparison) and E1M (matched-marginal test) are complete.
+**Status:** E1 (signal comparison), E1M (matched-marginal test), the §16
+correction study and **E5 (population compatibility, §10)** are complete.
 E2, E3 and E4 (§15, graph arms) have not been run. The design, decisions and
 their history are in `CLAUDE.md`; this file reports results only.
 
 ## 0. Summary
+
+**E5 (added 2026-09-29, see §10 and `docs/PROTOCOL_E5.md`).** E1/E1M held
+populations homogeneous, so their weak result for `S` did not establish that
+`S` fails under population shift. E5 tested that directly with a factorial
+population x missingness design and a marginal-only coverage control. Result:
+**all 320 primary contrasts negligible** — population similarity did not
+improve prediction even where the shift was real and `S` could see it, and
+pairwise coverage added nothing beyond marginal availability plus `S`. The
+diagnosis is score-utility alignment, not lack of opportunity: collaboration
+itself beats `local-only` by 3.4-5.3 % on wine, but donor rankings agree with
+measured transfer at or below chance.
 
 1. **Score-based donor weighting made no practical difference against equal
    donor weights.** In E1, all 48 score-arm vs `uniform-donor` contrasts have
@@ -2140,3 +2152,893 @@ D dup+scaler, E1 roles    1       1        e1  -9.07 [-11.67, -6.48] meaningful 
 |  | kin8nm | a | `results/e1m_corrected_random/20260929_7472d85_bf9d987b/` |
 |  | kin8nm | c | `results/e1m_corrected_random/20260929_7472d85_c2a90122/` |
 |  | protein | c | `results/e1m_corrected_random/20260929_7472d85_deb0a352/` |
+## 10. E5 — population compatibility under structured missingness
+
+Protocol: `docs/PROTOCOL_E5.md` (written and committed before any E5 evaluation; its §12 records the outcome). Factorial P0/P1 x M0/M1, 8 arms including the marginal-only coverage control, 10 frozen evaluation seeds disjoint from E1/E1M. **All 320 primary contrasts are negligible** (160 at t1, 160 at t2; every interval inside ±2 %).
+
+### 10.1 Construction checks (before training)
+
+```text
+######## concrete  n=1030  seeds=[211, 223, 227, 229, 233, 239, 241, 251, 257, 263]
+  partition characteristic (declared, target-free): f0 (278 distinct values); always_observed ['f0', 'f3', 'f4', 'f7']
+  maskable ['f1', 'f2', 'f5', 'f6']  panels [['f1', 'f5', 'f6'], ['f2']]
+
+  --- condition P0M0 (seed 211 shown; rates over all seeds)
+      client sizes [231, 213, 220, 216]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6732 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=231 tr/va/te=139/44/48 p_vec=[0.2, 0.9]
+         train rates f1=0.806 f2=0.144 f5=0.806 f6=0.806
+         H mean 0.376 max 0.655; C within -0.011 between -0.075; rows 0/1/2+ missing 1/7/131; partial-panel rows 66
+      c1 grp0 n=213 tr/va/te=126/44/43 p_vec=[0.2, 0.9]
+         train rates f1=0.810 f2=0.151 f5=0.810 f6=0.810
+         H mean 0.393 max 0.667; C within +0.039 between +0.016; rows 0/1/2+ missing 2/9/115; partial-panel rows 56
+      c2 grp1 n=220 tr/va/te=132/47/41 p_vec=[0.9, 0.2]
+         train rates f1=0.144 f2=0.811 f5=0.144 f6=0.144
+         H mean 0.069 max 0.121; C within -0.025 between +0.033; rows 0/1/2+ missing 17/72/43; partial-panel rows 50
+      c3 grp1 n=216 tr/va/te=130/43/43 p_vec=[0.9, 0.2]
+         train rates f1=0.146 f2=0.808 f5=0.146 f6=0.146
+         H mean 0.079 max 0.131; C within +0.096 between +0.055; rows 0/1/2+ missing 17/76/37; partial-panel rows 44
+      population: share of training rows below the pooled median of f0: c0=0.50 c1=0.52 c2=0.48 c3=0.57
+      S off-diagonal: min 0.8282 max 0.8789 spread 0.0507
+      receiver c0 scores: W_marg=0.227/0.819/0.817; W_H=0.059/0.651/0.661; S=0.853/0.861/0.860; Q=0.456/0.756/0.761; Q_marg=0.540/0.840/0.838   (donors c1/c2/c3)
+         fedavg                 weights 0.325/0.340/0.335  gamma 0.26
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.122/0.439/0.438  gamma 0.50
+         coverage-W_H           weights 0.043/0.474/0.482  gamma 0.50
+         population-S           weights 0.332/0.334/0.334  gamma 0.50
+         combined-Q             weights 0.231/0.383/0.386  gamma 0.50
+         combined-Q-marginal    weights 0.244/0.379/0.378  gamma 0.50
+
+  --- condition P0M1 (seed 211 shown; rates over all seeds)
+      client sizes [231, 213, 220, 216]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6732 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=231 tr/va/te=139/44/48 p_vec=[0.2, 0.9]
+         train rates f1=0.806 f2=0.144 f5=0.806 f6=0.806
+         H mean 0.464 max 0.799; C within +0.954 between +0.098; rows 0/1/2+ missing 23/5/111; partial-panel rows 3
+      c1 grp0 n=213 tr/va/te=126/44/43 p_vec=[0.2, 0.9]
+         train rates f1=0.810 f2=0.151 f5=0.810 f6=0.810
+         H mean 0.456 max 0.802; C within +0.949 between -0.078; rows 0/1/2+ missing 17/8/101; partial-panel rows 3
+      c2 grp1 n=220 tr/va/te=132/47/41 p_vec=[0.9, 0.2]
+         train rates f1=0.144 f2=0.811 f5=0.144 f6=0.144
+         H mean 0.112 max 0.129; C within +0.693 between +0.015; rows 0/1/2+ missing 19/89/24; partial-panel rows 15
+      c3 grp1 n=216 tr/va/te=130/43/43 p_vec=[0.9, 0.2]
+         train rates f1=0.146 f2=0.808 f5=0.146 f6=0.146
+         H mean 0.117 max 0.146; C within +0.630 between +0.110; rows 0/1/2+ missing 20/84/26; partial-panel rows 18
+      population: share of training rows below the pooled median of f0: c0=0.50 c1=0.52 c2=0.48 c3=0.57
+      S off-diagonal: min 0.8282 max 0.8789 spread 0.0507
+      receiver c0 scores: W_marg=0.227/0.819/0.817; W_H=0.178/0.727/0.720; S=0.853/0.861/0.860; Q=0.516/0.794/0.790; Q_marg=0.540/0.840/0.838   (donors c1/c2/c3)
+         fedavg                 weights 0.325/0.340/0.335  gamma 0.26
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.122/0.439/0.438  gamma 0.50
+         coverage-W_H           weights 0.110/0.447/0.443  gamma 0.50
+         population-S           weights 0.332/0.334/0.334  gamma 0.50
+         combined-Q             weights 0.246/0.378/0.376  gamma 0.50
+         combined-Q-marginal    weights 0.244/0.379/0.378  gamma 0.50
+
+  --- condition P1M0 (seed 211 shown; rates over all seeds)
+      client sizes [221, 221, 219, 219]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6732 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=221 tr/va/te=133/44/44 p_vec=[0.2, 0.9]
+         train rates f1=0.805 f2=0.143 f5=0.805 f6=0.805
+         H mean 0.376 max 0.654; C within -0.004 between -0.070; rows 0/1/2+ missing 1/10/122; partial-panel rows 63
+      c1 grp0 n=221 tr/va/te=133/44/44 p_vec=[0.2, 0.9]
+         train rates f1=0.805 f2=0.143 f5=0.805 f6=0.805
+         H mean 0.378 max 0.662; C within -0.068 between +0.039; rows 0/1/2+ missing 0/11/122; partial-panel rows 67
+      c2 grp1 n=219 tr/va/te=131/44/44 p_vec=[0.9, 0.2]
+         train rates f1=0.145 f2=0.809 f5=0.145 f6=0.145
+         H mean 0.078 max 0.130; C within +0.097 between +0.035; rows 0/1/2+ missing 17/75/39; partial-panel rows 44
+      c3 grp1 n=219 tr/va/te=131/44/44 p_vec=[0.9, 0.2]
+         train rates f1=0.145 f2=0.809 f5=0.145 f6=0.145
+         H mean 0.062 max 0.115; C within -0.067 between -0.039; rows 0/1/2+ missing 13/77/41; partial-panel rows 52
+      population: share of training rows below the pooled median of f0: c0=0.81 c1=0.20 c2=0.81 c3=0.22
+      S off-diagonal: min 0.7250 max 0.9161 spread 0.1911
+      receiver c0 scores: W_marg=0.232/0.818/0.818; W_H=0.048/0.662/0.644; S=0.737/0.916/0.725; Q=0.392/0.789/0.684; Q_marg=0.485/0.867/0.771   (donors c1/c2/c3)
+         fedavg                 weights 0.337/0.332/0.332  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.124/0.438/0.438  gamma 0.50
+         coverage-W_H           weights 0.035/0.489/0.475  gamma 0.50
+         population-S           weights 0.310/0.385/0.305  gamma 0.50
+         combined-Q             weights 0.210/0.423/0.367  gamma 0.50
+         combined-Q-marginal    weights 0.228/0.408/0.363  gamma 0.50
+
+  --- condition P1M1 (seed 211 shown; rates over all seeds)
+      client sizes [221, 221, 219, 219]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6732 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=221 tr/va/te=133/44/44 p_vec=[0.2, 0.9]
+         train rates f1=0.805 f2=0.143 f5=0.805 f6=0.805
+         H mean 0.451 max 0.797; C within +0.952 between -0.070; rows 0/1/2+ missing 19/8/106; partial-panel rows 3
+      c1 grp0 n=221 tr/va/te=133/44/44 p_vec=[0.2, 0.9]
+         train rates f1=0.805 f2=0.143 f5=0.805 f6=0.805
+         H mean 0.449 max 0.797; C within +0.952 between -0.106; rows 0/1/2+ missing 19/7/107; partial-panel rows 3
+      c2 grp1 n=219 tr/va/te=131/44/44 p_vec=[0.9, 0.2]
+         train rates f1=0.145 f2=0.809 f5=0.145 f6=0.145
+         H mean 0.104 max 0.115; C within +0.651 between -0.076; rows 0/1/2+ missing 19/83/29; partial-panel rows 17
+      c3 grp1 n=219 tr/va/te=131/44/44 p_vec=[0.9, 0.2]
+         train rates f1=0.145 f2=0.809 f5=0.145 f6=0.145
+         H mean 0.117 max 0.137; C within +0.672 between +0.090; rows 0/1/2+ missing 21/84/26; partial-panel rows 16
+      population: share of training rows below the pooled median of f0: c0=0.81 c1=0.20 c2=0.81 c3=0.22
+      S off-diagonal: min 0.7250 max 0.9161 spread 0.1911
+      receiver c0 scores: W_marg=0.232/0.818/0.818; W_H=0.184/0.735/0.740; S=0.737/0.916/0.725; Q=0.460/0.825/0.732; Q_marg=0.485/0.867/0.771   (donors c1/c2/c3)
+         fedavg                 weights 0.337/0.332/0.332  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.124/0.438/0.438  gamma 0.50
+         coverage-W_H           weights 0.111/0.443/0.446  gamma 0.50
+         population-S           weights 0.310/0.385/0.305  gamma 0.50
+         combined-Q             weights 0.228/0.409/0.363  gamma 0.50
+         combined-Q-marginal    weights 0.228/0.408/0.363  gamma 0.50
+
+######## wine  n=1599  seeds=[211, 223, 227, 229, 233, 239, 241, 251, 257, 263]
+  partition characteristic (declared, target-free): f7 (436 distinct values); always_observed ['f1', 'f4', 'f6', 'f7', 'f9', 'f10']
+  maskable ['f0', 'f2', 'f3', 'f5', 'f8']  panels [['f0', 'f2', 'f8'], ['f3', 'f5']]
+
+  --- condition P0M0 (seed 211 shown; rates over all seeds)
+      client sizes [374, 365, 340, 356]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6892 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=374 tr/va/te=223/71/80 p_vec=[0.2, 0.9]
+         train rates f0=0.807 f2=0.807 f3=0.143 f5=0.143 f8=0.807
+         H mean -0.080 max 0.117; C within -0.015 between -0.021; rows 0/1/2+ missing 0/16/207; partial-panel rows 160
+      c1 grp0 n=365 tr/va/te=220/74/71 p_vec=[0.2, 0.9]
+         train rates f0=0.809 f2=0.809 f3=0.145 f5=0.145 f8=0.809
+         H mean -0.076 max 0.127; C within +0.036 between +0.015; rows 0/1/2+ missing 3/15/202; partial-panel rows 153
+      c2 grp1 n=340 tr/va/te=198/77/65 p_vec=[0.9, 0.2]
+         train rates f0=0.146 f2=0.146 f3=0.808 f5=0.808 f8=0.146
+         H mean 0.015 max 0.131; C within -0.028 between +0.039; rows 0/1/2+ missing 6/40/152; partial-panel rows 140
+      c3 grp1 n=356 tr/va/te=212/75/69 p_vec=[0.9, 0.2]
+         train rates f0=0.146 f2=0.146 f3=0.811 f5=0.811 f8=0.146
+         H mean 0.018 max 0.123; C within -0.027 between -0.034; rows 0/1/2+ missing 6/36/170; partial-panel rows 149
+      population: share of training rows below the pooled median of f7: c0=0.52 c1=0.51 c2=0.50 c3=0.52
+      S off-diagonal: min 0.8407 max 0.8853 spread 0.0446
+      receiver c0 scores: W_marg=0.261/0.783/0.783; W_H=0.084/0.576/0.573; S=0.885/0.846/0.883; Q=0.485/0.711/0.728; Q_marg=0.573/0.815/0.833   (donors c1/c2/c3)
+         fedavg                 weights 0.349/0.314/0.337  gamma 0.26
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.143/0.429/0.429  gamma 0.50
+         coverage-W_H           weights 0.068/0.467/0.465  gamma 0.50
+         population-S           weights 0.339/0.324/0.338  gamma 0.50
+         combined-Q             weights 0.252/0.370/0.378  gamma 0.50
+         combined-Q-marginal    weights 0.258/0.367/0.375  gamma 0.50
+
+  --- condition P0M1 (seed 211 shown; rates over all seeds)
+      client sizes [374, 365, 340, 356]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6892 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=374 tr/va/te=223/71/80 p_vec=[0.2, 0.9]
+         train rates f0=0.807 f2=0.807 f3=0.143 f5=0.143 f8=0.807
+         H mean -0.024 max 0.121; C within +0.875 between +0.011; rows 0/1/2+ missing 32/8/183; partial-panel rows 24
+      c1 grp0 n=365 tr/va/te=220/74/71 p_vec=[0.2, 0.9]
+         train rates f0=0.809 f2=0.809 f3=0.145 f5=0.145 f8=0.809
+         H mean -0.025 max 0.132; C within +0.887 between +0.031; rows 0/1/2+ missing 34/4/182; partial-panel rows 23
+      c2 grp1 n=340 tr/va/te=198/77/65 p_vec=[0.9, 0.2]
+         train rates f0=0.146 f2=0.146 f3=0.808 f5=0.808 f8=0.146
+         H mean 0.052 max 0.126; C within +0.711 between +0.002; rows 0/1/2+ missing 25/12/161; partial-panel rows 31
+      c3 grp1 n=356 tr/va/te=212/75/69 p_vec=[0.9, 0.2]
+         train rates f0=0.146 f2=0.146 f3=0.811 f5=0.811 f8=0.146
+         H mean 0.061 max 0.127; C within +0.711 between +0.006; rows 0/1/2+ missing 30/6/176; partial-panel rows 33
+      population: share of training rows below the pooled median of f7: c0=0.52 c1=0.51 c2=0.50 c3=0.52
+      S off-diagonal: min 0.8407 max 0.8853 spread 0.0446
+      receiver c0 scores: W_marg=0.261/0.783/0.783; W_H=0.202/0.646/0.646; S=0.885/0.846/0.883; Q=0.544/0.746/0.764; Q_marg=0.573/0.815/0.833   (donors c1/c2/c3)
+         fedavg                 weights 0.349/0.314/0.337  gamma 0.26
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.143/0.429/0.429  gamma 0.50
+         coverage-W_H           weights 0.135/0.433/0.432  gamma 0.50
+         population-S           weights 0.339/0.324/0.338  gamma 0.50
+         combined-Q             weights 0.265/0.363/0.372  gamma 0.50
+         combined-Q-marginal    weights 0.258/0.367/0.375  gamma 0.50
+
+  --- condition P1M0 (seed 211 shown; rates over all seeds)
+      client sizes [359, 359, 358, 359]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6843 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=359 tr/va/te=215/72/72 p_vec=[0.2, 0.9]
+         train rates f0=0.809 f2=0.809 f3=0.144 f5=0.144 f8=0.809
+         H mean -0.086 max 0.140; C within +0.013 between +0.019; rows 0/1/2+ missing 1/19/195; partial-panel rows 152
+      c1 grp0 n=359 tr/va/te=215/72/72 p_vec=[0.2, 0.9]
+         train rates f0=0.809 f2=0.809 f3=0.144 f5=0.144 f8=0.809
+         H mean -0.088 max 0.126; C within +0.003 between +0.003; rows 0/1/2+ missing 0/19/196; partial-panel rows 151
+      c2 grp1 n=358 tr/va/te=215/73/70 p_vec=[0.9, 0.2]
+         train rates f0=0.144 f2=0.144 f3=0.809 f5=0.809 f8=0.144
+         H mean 0.018 max 0.116; C within -0.019 between -0.048; rows 0/1/2+ missing 5/38/172; partial-panel rows 149
+      c3 grp1 n=359 tr/va/te=215/73/71 p_vec=[0.9, 0.2]
+         train rates f0=0.144 f2=0.144 f3=0.809 f5=0.809 f8=0.144
+         H mean 0.021 max 0.130; C within +0.003 between -0.020; rows 0/1/2+ missing 5/41/169; partial-panel rows 143
+      population: share of training rows below the pooled median of f7: c0=0.82 c1=0.22 c2=0.81 c3=0.21
+      S off-diagonal: min 0.7589 max 0.8876 spread 0.1287
+      receiver c0 scores: W_marg=0.261/0.785/0.785; W_H=0.072/0.575/0.576; S=0.763/0.888/0.778; Q=0.417/0.731/0.677; Q_marg=0.512/0.836/0.782   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.143/0.429/0.429  gamma 0.50
+         coverage-W_H           weights 0.059/0.470/0.471  gamma 0.50
+         population-S           weights 0.314/0.365/0.320  gamma 0.50
+         combined-Q             weights 0.229/0.401/0.371  gamma 0.50
+         combined-Q-marginal    weights 0.240/0.393/0.367  gamma 0.50
+
+  --- condition P1M1 (seed 211 shown; rates over all seeds)
+      client sizes [359, 359, 358, 359]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6843 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=359 tr/va/te=215/72/72 p_vec=[0.2, 0.9]
+         train rates f0=0.809 f2=0.809 f3=0.144 f5=0.144 f8=0.809
+         H mean -0.034 max 0.121; C within +0.870 between +0.031; rows 0/1/2+ missing 31/8/176; partial-panel rows 24
+      c1 grp0 n=359 tr/va/te=215/72/72 p_vec=[0.2, 0.9]
+         train rates f0=0.809 f2=0.809 f3=0.144 f5=0.144 f8=0.809
+         H mean -0.034 max 0.126; C within +0.868 between +0.031; rows 0/1/2+ missing 33/4/178; partial-panel rows 25
+      c2 grp1 n=358 tr/va/te=215/73/70 p_vec=[0.9, 0.2]
+         train rates f0=0.144 f2=0.144 f3=0.809 f5=0.809 f8=0.144
+         H mean 0.064 max 0.126; C within +0.729 between +0.025; rows 0/1/2+ missing 30/9/176; partial-panel rows 30
+      c3 grp1 n=359 tr/va/te=215/73/71 p_vec=[0.9, 0.2]
+         train rates f0=0.144 f2=0.144 f3=0.809 f5=0.809 f8=0.144
+         H mean 0.064 max 0.126; C within +0.721 between +0.031; rows 0/1/2+ missing 30/10/175; partial-panel rows 32
+      population: share of training rows below the pooled median of f7: c0=0.82 c1=0.22 c2=0.81 c3=0.21
+      S off-diagonal: min 0.7589 max 0.8876 spread 0.1287
+      receiver c0 scores: W_marg=0.261/0.785/0.785; W_H=0.199/0.647/0.647; S=0.763/0.888/0.778; Q=0.481/0.767/0.713; Q_marg=0.512/0.836/0.782   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.143/0.429/0.429  gamma 0.50
+         coverage-W_H           weights 0.133/0.433/0.433  gamma 0.50
+         population-S           weights 0.314/0.365/0.320  gamma 0.50
+         combined-Q             weights 0.245/0.391/0.363  gamma 0.50
+         combined-Q-marginal    weights 0.240/0.393/0.367  gamma 0.50
+
+######## kin8nm  n=8192  seeds=[211, 223, 227, 229, 233, 239, 241, 251, 257, 263]
+  partition characteristic (declared, target-free): f0 (8192 distinct values); always_observed ['f0', 'f2', 'f4', 'f7']
+  maskable ['f1', 'f3', 'f5', 'f6']  panels [['f5', 'f6'], ['f1', 'f3']]
+
+  --- condition P0M0 (seed 211 shown; rates over all seeds)
+      client sizes [1844, 1843, 1843, 1843]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6646 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=1844 tr/va/te=1106/369/369 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean -0.041 max 0.114; C within -0.008 between -0.003; rows 0/1/2+ missing 24/269/813; partial-panel rows 622
+      c1 grp0 n=1843 tr/va/te=1106/369/368 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean -0.039 max 0.115; C within -0.014 between +0.017; rows 0/1/2+ missing 29/263/814; partial-panel rows 624
+      c2 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean 0.037 max 0.115; C within +0.035 between -0.021; rows 0/1/2+ missing 32/244/830; partial-panel rows 594
+      c3 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean -0.080 max 0.020; C within -0.022 between -0.001; rows 0/1/2+ missing 26/261/819; partial-panel rows 630
+      population: share of training rows below the pooled median of f0: c0=0.50 c1=0.48 c2=0.49 c3=0.50
+      S off-diagonal: min 0.9437 max 0.9564 spread 0.0127
+      receiver c0 scores: W_marg=0.291/0.753/0.753; W_H=0.102/0.484/0.482; S=0.955/0.953/0.944; Q=0.529/0.719/0.713; Q_marg=0.623/0.853/0.848   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.162/0.419/0.419  gamma 0.50
+         coverage-W_H           weights 0.095/0.453/0.451  gamma 0.50
+         population-S           weights 0.335/0.334/0.331  gamma 0.50
+         combined-Q             weights 0.270/0.367/0.364  gamma 0.50
+         combined-Q-marginal    weights 0.268/0.367/0.365  gamma 0.50
+
+  --- condition P0M1 (seed 211 shown; rates over all seeds)
+      client sizes [1844, 1843, 1843, 1843]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6646 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=1844 tr/va/te=1106/369/369 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean -0.038 max 0.106; C within +0.808 between +0.023; rows 0/1/2+ missing 164/36/906; partial-panel rows 110
+      c1 grp0 n=1843 tr/va/te=1106/369/368 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean 0.035 max 0.113; C within +0.804 between -0.022; rows 0/1/2+ missing 158/36/912; partial-panel rows 112
+      c2 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean -0.037 max 0.107; C within +0.796 between +0.040; rows 0/1/2+ missing 169/32/905; partial-panel rows 116
+      c3 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean -0.039 max 0.106; C within +0.790 between +0.022; rows 0/1/2+ missing 167/31/908; partial-panel rows 120
+      population: share of training rows below the pooled median of f0: c0=0.50 c1=0.48 c2=0.49 c3=0.50
+      S off-diagonal: min 0.9437 max 0.9564 spread 0.0127
+      receiver c0 scores: W_marg=0.291/0.753/0.753; W_H=0.221/0.539/0.537; S=0.955/0.953/0.944; Q=0.588/0.746/0.741; Q_marg=0.623/0.853/0.848   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.162/0.419/0.419  gamma 0.50
+         coverage-W_H           weights 0.170/0.415/0.414  gamma 0.50
+         population-S           weights 0.335/0.334/0.331  gamma 0.50
+         combined-Q             weights 0.283/0.360/0.357  gamma 0.50
+         combined-Q-marginal    weights 0.268/0.367/0.365  gamma 0.50
+
+  --- condition P1M0 (seed 211 shown; rates over all seeds)
+      client sizes [1844, 1843, 1843, 1843]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6646 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=1844 tr/va/te=1106/369/369 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean -0.041 max 0.114; C within -0.008 between -0.003; rows 0/1/2+ missing 24/269/813; partial-panel rows 622
+      c1 grp0 n=1843 tr/va/te=1106/369/368 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean -0.039 max 0.115; C within -0.014 between +0.017; rows 0/1/2+ missing 29/263/814; partial-panel rows 624
+      c2 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean 0.037 max 0.115; C within +0.035 between -0.021; rows 0/1/2+ missing 32/244/830; partial-panel rows 594
+      c3 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean -0.080 max 0.020; C within -0.022 between -0.001; rows 0/1/2+ missing 26/261/819; partial-panel rows 630
+      population: share of training rows below the pooled median of f0: c0=0.80 c1=0.20 c2=0.78 c3=0.20
+      S off-diagonal: min 0.8020 max 0.9503 spread 0.1483
+      receiver c0 scores: W_marg=0.291/0.753/0.753; W_H=0.102/0.484/0.482; S=0.820/0.944/0.802; Q=0.461/0.714/0.642; Q_marg=0.555/0.849/0.778   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.162/0.419/0.419  gamma 0.50
+         coverage-W_H           weights 0.095/0.453/0.451  gamma 0.50
+         population-S           weights 0.320/0.368/0.313  gamma 0.50
+         combined-Q             weights 0.254/0.393/0.353  gamma 0.50
+         combined-Q-marginal    weights 0.255/0.389/0.356  gamma 0.50
+
+  --- condition P1M1 (seed 211 shown; rates over all seeds)
+      client sizes [1844, 1843, 1843, 1843]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6646 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=1844 tr/va/te=1106/369/369 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean -0.038 max 0.106; C within +0.808 between +0.023; rows 0/1/2+ missing 164/36/906; partial-panel rows 110
+      c1 grp0 n=1843 tr/va/te=1106/369/368 p_vec=[0.2, 0.9]
+         train rates f1=0.146 f3=0.146 f5=0.810 f6=0.810
+         H mean 0.035 max 0.113; C within +0.804 between -0.022; rows 0/1/2+ missing 158/36/912; partial-panel rows 112
+      c2 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean -0.037 max 0.107; C within +0.796 between +0.040; rows 0/1/2+ missing 169/32/905; partial-panel rows 116
+      c3 grp1 n=1843 tr/va/te=1106/369/368 p_vec=[0.9, 0.2]
+         train rates f1=0.810 f3=0.810 f5=0.146 f6=0.146
+         H mean -0.039 max 0.106; C within +0.790 between +0.022; rows 0/1/2+ missing 167/31/908; partial-panel rows 120
+      population: share of training rows below the pooled median of f0: c0=0.80 c1=0.20 c2=0.78 c3=0.20
+      S off-diagonal: min 0.8020 max 0.9503 spread 0.1483
+      receiver c0 scores: W_marg=0.291/0.753/0.753; W_H=0.221/0.539/0.537; S=0.820/0.944/0.802; Q=0.520/0.742/0.670; Q_marg=0.555/0.849/0.778   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.162/0.419/0.419  gamma 0.50
+         coverage-W_H           weights 0.170/0.415/0.414  gamma 0.50
+         population-S           weights 0.320/0.368/0.313  gamma 0.50
+         combined-Q             weights 0.269/0.384/0.347  gamma 0.50
+         combined-Q-marginal    weights 0.255/0.389/0.356  gamma 0.50
+
+######## protein  n=45730  seeds=[211, 223, 227, 229, 233, 239, 241, 251, 257, 263]
+  partition characteristic (declared, target-free): f3 (40374 distinct values); always_observed ['f1', 'f2', 'f3', 'f5', 'f8']
+  maskable ['f0', 'f4', 'f6', 'f7']  panels [['f0', 'f4', 'f7'], ['f6']]
+
+  --- condition P0M0 (seed 211 shown; rates over all seeds)
+      client sizes [10284, 10281, 10280, 10305]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6658 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=10284 tr/va/te=6182/2056/2046 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean -0.006 max -0.005; C within +0.000 between +0.009; rows 0/1/2+ missing 39/468/5675; partial-panel rows 2852
+      c1 grp0 n=10281 tr/va/te=6161/2061/2059 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean -0.008 max -0.005; C within -0.001 between -0.004; rows 0/1/2+ missing 27/489/5645; partial-panel rows 2847
+      c2 grp1 n=10280 tr/va/te=6164/2055/2061 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean -0.001 max 0.020; C within -0.002 between -0.014; rows 0/1/2+ missing 703/3540/1921; partial-panel rows 2295
+      c3 grp1 n=10305 tr/va/te=6182/2063/2060 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean -0.007 max 0.018; C within -0.000 between -0.001; rows 0/1/2+ missing 724/3527/1931; partial-panel rows 2299
+      population: share of training rows below the pooled median of f3: c0=0.50 c1=0.50 c2=0.50 c3=0.50
+      S off-diagonal: min 0.9760 max 0.9809 spread 0.0049
+      receiver c0 scores: W_marg=0.227/0.818/0.818; W_H=0.055/0.644/0.644; S=0.976/0.981/0.977; Q=0.516/0.812/0.810; Q_marg=0.602/0.899/0.897   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.334  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.122/0.439/0.439  gamma 0.50
+         coverage-W_H           weights 0.041/0.479/0.480  gamma 0.50
+         population-S           weights 0.333/0.334/0.333  gamma 0.50
+         combined-Q             weights 0.241/0.380/0.379  gamma 0.50
+         combined-Q-marginal    weights 0.251/0.375/0.374  gamma 0.50
+
+  --- condition P0M1 (seed 211 shown; rates over all seeds)
+      client sizes [10284, 10281, 10280, 10305]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6658 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=10284 tr/va/te=6182/2056/2046 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean 0.004 max 0.014; C within +0.940 between +0.000; rows 0/1/2+ missing 906/300/4976; partial-panel rows 172
+      c1 grp0 n=10281 tr/va/te=6161/2061/2059 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean 0.002 max 0.012; C within +0.938 between +0.006; rows 0/1/2+ missing 901/307/4953; partial-panel rows 177
+      c2 grp1 n=10280 tr/va/te=6164/2055/2061 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean 0.006 max 0.020; C within +0.656 between +0.004; rows 0/1/2+ missing 920/3964/1280; partial-panel rows 787
+      c3 grp1 n=10305 tr/va/te=6182/2063/2060 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean 0.007 max 0.020; C within +0.655 between +0.008; rows 0/1/2+ missing 920/3983/1279; partial-panel rows 793
+      population: share of training rows below the pooled median of f3: c0=0.50 c1=0.50 c2=0.50 c3=0.50
+      S off-diagonal: min 0.9760 max 0.9809 spread 0.0049
+      receiver c0 scores: W_marg=0.227/0.818/0.818; W_H=0.178/0.729/0.729; S=0.976/0.981/0.977; Q=0.577/0.855/0.853; Q_marg=0.602/0.899/0.897   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.334  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.122/0.439/0.439  gamma 0.50
+         coverage-W_H           weights 0.109/0.446/0.446  gamma 0.50
+         population-S           weights 0.333/0.334/0.333  gamma 0.50
+         combined-Q             weights 0.253/0.374/0.373  gamma 0.50
+         combined-Q-marginal    weights 0.251/0.375/0.374  gamma 0.50
+
+  --- condition P1M0 (seed 211 shown; rates over all seeds)
+      client sizes [10288, 10288, 10287, 10287]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6651 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=10288 tr/va/te=6173/2058/2057 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean -0.006 max -0.005; C within +0.011 between +0.000; rows 0/1/2+ missing 44/473/5656; partial-panel rows 2818
+      c1 grp0 n=10288 tr/va/te=6173/2058/2057 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean -0.007 max -0.004; C within +0.009 between -0.001; rows 0/1/2+ missing 52/453/5668; partial-panel rows 2824
+      c2 grp1 n=10287 tr/va/te=6172/2057/2058 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean -0.008 max 0.017; C within -0.008 between -0.005; rows 0/1/2+ missing 713/3527/1932; partial-panel rows 2314
+      c3 grp1 n=10287 tr/va/te=6172/2057/2058 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean -0.007 max 0.020; C within -0.001 between -0.002; rows 0/1/2+ missing 734/3485/1953; partial-panel rows 2298
+      population: share of training rows below the pooled median of f3: c0=0.81 c1=0.20 c2=0.80 c3=0.20
+      S off-diagonal: min 0.6092 max 0.9845 spread 0.3752
+      receiver c0 scores: W_marg=0.227/0.818/0.818; W_H=0.056/0.644/0.645; S=0.610/0.974/0.609; Q=0.333/0.809/0.627; Q_marg=0.419/0.896/0.713   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.122/0.439/0.439  gamma 0.50
+         coverage-W_H           weights 0.042/0.479/0.479  gamma 0.50
+         population-S           weights 0.278/0.444/0.278  gamma 0.50
+         combined-Q             weights 0.188/0.457/0.354  gamma 0.50
+         combined-Q-marginal    weights 0.206/0.442/0.352  gamma 0.50
+
+  --- condition P1M1 (seed 211 shown; rates over all seeds)
+      client sizes [10288, 10288, 10287, 10287]; duplicate groups split across locations 0 (must be 0); all pool rows used: True
+      M0<->M1 per-feature COUNT mismatches (must be 0, over all seeds/clients/folds): 0 -> EXACTLY MATCHED
+      cross-client rate spread within a fold: 0.6651 (design feature - clients carry different group profiles, not bounded)
+      c0 grp0 n=10288 tr/va/te=6173/2058/2057 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean 0.001 max 0.013; C within +0.939 between -0.032; rows 0/1/2+ missing 881/318/4974; partial-panel rows 174
+      c1 grp0 n=10288 tr/va/te=6173/2058/2057 p_vec=[0.2, 0.9]
+         train rates f0=0.810 f4=0.810 f6=0.145 f7=0.810
+         H mean 0.003 max 0.013; C within +0.938 between -0.000; rows 0/1/2+ missing 909/286/4978; partial-panel rows 176
+      c2 grp1 n=10287 tr/va/te=6172/2057/2058 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean 0.008 max 0.020; C within +0.653 between +0.025; rows 0/1/2+ missing 922/3986/1264; partial-panel rows 797
+      c3 grp1 n=10287 tr/va/te=6172/2057/2058 p_vec=[0.9, 0.2]
+         train rates f0=0.145 f4=0.145 f6=0.810 f7=0.145
+         H mean 0.005 max 0.020; C within +0.655 between -0.012; rows 0/1/2+ missing 895/4010/1267; partial-panel rows 791
+      population: share of training rows below the pooled median of f3: c0=0.81 c1=0.20 c2=0.80 c3=0.20
+      S off-diagonal: min 0.6092 max 0.9845 spread 0.3752
+      receiver c0 scores: W_marg=0.227/0.818/0.818; W_H=0.178/0.732/0.732; S=0.610/0.974/0.609; Q=0.394/0.853/0.670; Q_marg=0.419/0.896/0.713   (donors c1/c2/c3)
+         fedavg                 weights 0.333/0.333/0.333  gamma 0.25
+         uniform-donor          weights 0.333/0.333/0.333  gamma 0.50
+         coverage-marginal      weights 0.122/0.439/0.439  gamma 0.50
+         coverage-W_H           weights 0.109/0.446/0.446  gamma 0.50
+         population-S           weights 0.278/0.444/0.278  gamma 0.50
+         combined-Q             weights 0.205/0.445/0.350  gamma 0.50
+         combined-Q-marginal    weights 0.206/0.442/0.352  gamma 0.50
+
+SUMMARY - invariant: M0<->M1 per-feature counts identical, duplicate groups whole
+  concrete  P0M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6732 (design) -> PASS
+  concrete  P0M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6732 (design) -> PASS
+  concrete  P1M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6732 (design) -> PASS
+  concrete  P1M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6732 (design) -> PASS
+  wine      P0M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6892 (design) -> PASS
+  wine      P0M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6892 (design) -> PASS
+  wine      P1M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6843 (design) -> PASS
+  wine      P1M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6843 (design) -> PASS
+  kin8nm    P0M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6646 (design) -> PASS
+  kin8nm    P0M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6646 (design) -> PASS
+  kin8nm    P1M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6646 (design) -> PASS
+  kin8nm    P1M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6646 (design) -> PASS
+  protein   P0M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6658 (design) -> PASS
+  protein   P0M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6658 (design) -> PASS
+  protein   P1M0 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6651 (design) -> PASS
+  protein   P1M1 count mismatches 0; duplicate groups split 0; cross-client rate spread 0.6651 (design) -> PASS
+VERDICT: all constructions satisfy the design
+```
+
+### 10.2 Stage A — synthetic sanity check
+
+```text
+E5 Stage A - synthetic sanity check. Success for S or Q is NOT required.
+
+  n=4000 d=8; one shared outcome function; relevance switches at f0=0
+  maskable ['f2', 'f3', 'f6', 'f7']; always_observed ['f0', 'f1', 'f4', 'f5']
+  partition characteristic (declared rule): f0
+
+1) Do the intended population differences exist?
+   P0: below-median share per client [0.5, 0.46, 0.53, 0.5]; S off-diagonal 0.917-0.949 (spread 0.031); train y mean [-0.03, 0.09, -0.07, -0.08]
+   P1: below-median share per client [0.8, 0.21, 0.81, 0.22]; S off-diagonal 0.731-0.927 (spread 0.196); train y mean [-0.78, 0.67, -0.78, 0.7]
+   (P1 shares should track frac_low and keep overlap; S spread should widen.)
+
+2) Pipeline runs and M0/M1 differ only in joint structure
+   P0M0: W_marg 0.5891  W_H 0.3155  S 0.9270  Q 0.6212  Q_marg 0.7580
+   P0M1: W_marg 0.5891  W_H 0.4083  S 0.9270  Q 0.6677  Q_marg 0.7580
+   P1M0: W_marg 0.5891  W_H 0.3155  S 0.8054  Q 0.5604  Q_marg 0.6972
+   P1M1: W_marg 0.5891  W_H 0.4083  S 0.8054  Q 0.6069  Q_marg 0.6972
+   P0: M0 vs M1 identical for {'W_marg': True, 'S': True, 'Q_marg': True}; W_H differs: True  (designed: only joint structure changes)
+   P1: M0 vs M1 identical for {'W_marg': True, 'S': True, 'Q_marg': True}; W_H differs: True  (designed: only joint structure changes)
+
+3) Arm contrasts (test fold, t2) - reported, not required to favour any arm
+   P0M0: population-S vs uniform-donor -0.01 [-0.01,+0.00] negligible; combined-Q vs combined-Q-marginal -0.03 [-0.23,+0.17] negligible; combined-Q vs uniform-donor +0.03 [-0.08,+0.13] negligible
+   P0M1: population-S vs uniform-donor +0.01 [-0.01,+0.03] negligible; combined-Q vs combined-Q-marginal -0.03 [-0.17,+0.10] negligible; combined-Q vs uniform-donor +0.05 [-0.08,+0.19] negligible
+   P1M0: population-S vs uniform-donor -0.26 [-0.40,-0.13] negligible; combined-Q vs combined-Q-marginal -0.02 [-0.23,+0.20] negligible; combined-Q vs uniform-donor -0.24 [-0.48,+0.00] negligible
+   P1M1: population-S vs uniform-donor -0.30 [-0.54,-0.05] negligible; combined-Q vs combined-Q-marginal +0.11 [-0.07,+0.30] negligible; combined-Q vs uniform-donor -0.17 [-0.42,+0.07] negligible
+
+Stage A is a pipeline and construction check only. No budget, arm or setting is chosen from these numbers.
+```
+
+### 10.3 Stage B — development run and budget selection
+
+```text
+E5 Stage B - development run. Seeds [2, 3, 5]; VALIDATION fold only; test never touched.
+
+1) Local-training learning curve (local-only, mean validation RMSE over clients x seeds; condition P1M1)
+   steps    10  concrete  val RMSE 15.5960
+   steps    10  wine      val RMSE 0.8010
+   steps    20  concrete  val RMSE 14.7937
+   steps    20  wine      val RMSE 0.7716
+   steps    30  concrete  val RMSE 13.9247
+   steps    30  wine      val RMSE 0.7394
+   steps    50  concrete  val RMSE 11.8279
+   steps    50  wine      val RMSE 0.6974
+   steps   100  concrete  val RMSE 9.5002
+   steps   100  wine      val RMSE 0.6996
+   steps   200  concrete  val RMSE 8.4852
+   steps   200  wine      val RMSE 0.7159
+   steps   300  concrete  val RMSE 8.1891
+   steps   300  wine      val RMSE 0.7454
+   steps   500  concrete  val RMSE 8.2776
+   steps   500  wine      val RMSE 0.7945
+   scale-free curve (1.0 = best): 10:1.5265  20:1.4565  30:1.3803  50:1.2222  100:1.0816  200:1.0313  300:1.0344  500:1.0750
+   -> local_steps = 200 (smallest within 1% of the minimum); wall-clock per grid point [0.9, 1.1, 1.3, 1.7, 2.8, 4.8, 7.0, 11.2] s
+
+2) Adaptation-budget curve (uniform-donor CONTROL, mean validation RMSE; P1M1)
+   budget    0  concrete  val RMSE 8.7532
+   budget   10  concrete  val RMSE 8.4162
+   budget   25  concrete  val RMSE 8.2531
+   budget   50  concrete  val RMSE 8.1618
+   budget  100  concrete  val RMSE 8.0653
+   budget  200  concrete  val RMSE 8.0838
+   budget  400  concrete  val RMSE 8.1799
+   budget    0  wine      val RMSE 0.6738
+   budget   10  wine      val RMSE 0.6871
+   budget   25  wine      val RMSE 0.6931
+   budget   50  wine      val RMSE 0.7054
+   budget  100  wine      val RMSE 0.7112
+   budget  200  wine      val RMSE 0.7429
+   budget  400  wine      val RMSE 0.7827
+   scale-free curve (1.0 = best): 0:1.0426  10:1.0317  25:1.0260  50:1.0294  100:1.0278  200:1.0525  400:1.0879
+   -> adapt_budget = 10 (smallest within 1% of the minimum)
+
+3) Numerical stability and runtime at the chosen budget
+   concrete     3.3s for 3 seeds x 4 receivers x 8 arms; non-finite metrics 0; fallback rows 0; val RMSE range 5.822-10.811
+   wine         3.3s for 3 seeds x 4 receivers x 8 arms; non-finite metrics 0; fallback rows 0; val RMSE range 0.550-0.898
+
+CHOSEN (from validation curves, no score arm involved): local_steps=200, adapt_budget=10
+```
+
+### 10.4 Stage C — frozen evaluation, primary comparisons and diagnostics
+
+```text
+E5 analysis - stage eval. Test fold; Delta% of the comparator's RMSE; seed = replication unit; delta = 2.0%.
+Datasets ['concrete', 'wine', 'kin8nm', 'protein']; conditions ['P0M0', 'P0M1', 'P1M0', 'P1M1']; S configurations ['primary', 'robust'].
+
+==============================================================================================================
+PRIMARY COMPARISONS (timepoint t2)
+
+  combined-Q vs coverage-W_H   -- does population similarity add value?
+    S configuration: primary
+      concrete  P0M0  -0.15 [ -0.53, +0.24] negligible | P0M1  +0.07 [ -0.30, +0.44] negligible | P1M0  -0.10 [ -0.39, +0.18] negligible | P1M1  -0.23 [ -0.61, +0.15] negligible
+      wine      P0M0  -0.00 [ -0.18, +0.18] negligible | P0M1  +0.01 [ -0.09, +0.12] negligible | P1M0  +0.04 [ -0.10, +0.18] negligible | P1M1  +0.13 [ +0.05, +0.20] negligible
+      kin8nm    P0M0  -0.17 [ -0.21, -0.12] negligible | P0M1  -0.07 [ -0.10, -0.04] negligible | P1M0  -0.12 [ -0.18, -0.06] negligible | P1M1  -0.06 [ -0.09, -0.03] negligible
+      protein   P0M0  -0.03 [ -0.06, +0.01] negligible | P0M1  +0.00 [ -0.03, +0.04] negligible | P1M0  -0.01 [ -0.03, +0.02] negligible | P1M1  -0.01 [ -0.03, +0.02] negligible
+    S configuration: robust
+      concrete  P0M0  -0.15 [ -0.53, +0.23] negligible | P0M1  +0.07 [ -0.29, +0.44] negligible | P1M0  -0.18 [ -0.46, +0.11] negligible | P1M1  -0.18 [ -0.53, +0.18] negligible
+      wine      P0M0  -0.00 [ -0.18, +0.18] negligible | P0M1  +0.01 [ -0.09, +0.11] negligible | P1M0  +0.06 [ -0.10, +0.21] negligible | P1M1  +0.14 [ +0.06, +0.21] negligible
+      kin8nm    P0M0  -0.17 [ -0.21, -0.12] negligible | P0M1  -0.07 [ -0.10, -0.04] negligible | P1M0  -0.13 [ -0.20, -0.07] negligible | P1M1  -0.08 [ -0.11, -0.04] negligible
+      protein   P0M0  -0.03 [ -0.06, +0.01] negligible | P0M1  +0.00 [ -0.03, +0.04] negligible | P1M0  -0.01 [ -0.03, +0.02] negligible | P1M1  -0.01 [ -0.03, +0.02] negligible
+
+  combined-Q vs population-S   -- does coverage add value?
+    S configuration: primary
+      concrete  P0M0  +0.14 [ -0.01, +0.29] negligible | P0M1  +0.01 [ -0.14, +0.16] negligible | P1M0  +0.11 [ -0.03, +0.26] negligible | P1M1  +0.08 [ -0.09, +0.24] negligible
+      wine      P0M0  -0.00 [ -0.09, +0.08] negligible | P0M1  -0.00 [ -0.09, +0.09] negligible | P1M0  -0.02 [ -0.10, +0.06] negligible | P1M1  -0.06 [ -0.10, -0.01] negligible
+      kin8nm    P0M0  +0.06 [ +0.04, +0.08] negligible | P0M1  +0.04 [ +0.02, +0.05] negligible | P1M0  +0.06 [ +0.04, +0.08] negligible | P1M1  +0.02 [ +0.01, +0.04] negligible
+      protein   P0M0  +0.02 [ +0.01, +0.03] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.01 [ -0.00, +0.02] negligible | P1M1  +0.01 [ -0.01, +0.03] negligible
+    S configuration: robust
+      concrete  P0M0  +0.13 [ -0.03, +0.29] negligible | P0M1  +0.01 [ -0.13, +0.16] negligible | P1M0  +0.08 [ -0.08, +0.23] negligible | P1M1  +0.11 [ -0.03, +0.26] negligible
+      wine      P0M0  -0.01 [ -0.09, +0.08] negligible | P0M1  +0.01 [ -0.09, +0.11] negligible | P1M0  -0.01 [ -0.09, +0.07] negligible | P1M1  -0.05 [ -0.09, -0.01] negligible
+      kin8nm    P0M0  +0.06 [ +0.04, +0.08] negligible | P0M1  +0.04 [ +0.03, +0.05] negligible | P1M0  +0.05 [ +0.02, +0.07] negligible | P1M1  +0.02 [ +0.01, +0.04] negligible
+      protein   P0M0  +0.02 [ +0.01, +0.03] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.01 [ -0.00, +0.02] negligible | P1M1  +0.01 [ -0.01, +0.03] negligible
+
+  combined-Q vs combined-Q-marginal   -- does PAIRWISE add beyond marginal+S?
+    S configuration: primary
+      concrete  P0M0  -0.02 [ -0.08, +0.05] negligible | P0M1  -0.15 [ -0.32, +0.03] negligible | P1M0  -0.02 [ -0.08, +0.04] negligible | P1M1  -0.05 [ -0.23, +0.13] negligible
+      wine      P0M0  -0.01 [ -0.02, +0.01] negligible | P0M1  +0.01 [ -0.02, +0.04] negligible | P1M0  -0.00 [ -0.02, +0.02] negligible | P1M1  +0.02 [ -0.01, +0.05] negligible
+      kin8nm    P0M0  -0.00 [ -0.00, +0.00] negligible | P0M1  -0.01 [ -0.01, -0.00] negligible | P1M0  -0.00 [ -0.01, +0.00] negligible | P1M1  -0.01 [ -0.02, -0.00] negligible
+      protein   P0M0  -0.01 [ -0.02, -0.00] negligible | P0M1  -0.02 [ -0.03, -0.01] negligible | P1M0  -0.01 [ -0.02, -0.00] negligible | P1M1  -0.01 [ -0.02, -0.00] negligible
+    S configuration: robust
+      concrete  P0M0  -0.03 [ -0.10, +0.04] negligible | P0M1  -0.14 [ -0.31, +0.04] negligible | P1M0  -0.06 [ -0.13, +0.01] negligible | P1M1  -0.00 [ -0.18, +0.18] negligible
+      wine      P0M0  -0.00 [ -0.01, +0.01] negligible | P0M1  +0.01 [ -0.02, +0.03] negligible | P1M0  -0.01 [ -0.02, +0.01] negligible | P1M1  +0.02 [ -0.01, +0.05] negligible
+      kin8nm    P0M0  -0.00 [ -0.00, +0.00] negligible | P0M1  -0.01 [ -0.01, -0.00] negligible | P1M0  -0.00 [ -0.00, +0.00] negligible | P1M1  -0.01 [ -0.02, -0.00] negligible
+      protein   P0M0  -0.01 [ -0.02, -0.00] negligible | P0M1  -0.02 [ -0.02, -0.01] negligible | P1M0  -0.01 [ -0.01, -0.00] negligible | P1M1  -0.01 [ -0.02, -0.00] negligible
+
+  population-S vs uniform-donor   -- does the population signal help?
+    S configuration: primary
+      concrete  P0M0  -0.01 [ -0.03, +0.00] negligible | P0M1  +0.01 [ -0.01, +0.02] negligible | P1M0  +0.05 [ -0.01, +0.10] negligible | P1M1  -0.01 [ -0.10, +0.08] negligible
+      wine      P0M0  -0.00 [ -0.02, +0.02] negligible | P0M1  -0.01 [ -0.02, +0.01] negligible | P1M0  -0.03 [ -0.08, +0.02] negligible | P1M1  -0.01 [ -0.05, +0.02] negligible
+      kin8nm    P0M0  +0.00 [ +0.00, +0.01] negligible | P0M1  +0.00 [ -0.00, +0.01] negligible | P1M0  +0.00 [ -0.01, +0.02] negligible | P1M1  +0.02 [ +0.00, +0.03] negligible
+      protein   P0M0  +0.00 [ -0.00, +0.00] negligible | P0M1  +0.00 [ -0.00, +0.00] negligible | P1M0  -0.01 [ -0.02, +0.00] negligible | P1M1  -0.01 [ -0.02, +0.00] negligible
+    S configuration: robust
+      concrete  P0M0  -0.00 [ -0.02, +0.01] negligible | P0M1  +0.01 [ -0.02, +0.03] negligible | P1M0  +0.01 [ -0.02, +0.03] negligible | P1M1  +0.01 [ -0.02, +0.04] negligible
+      wine      P0M0  +0.00 [ -0.02, +0.02] negligible | P0M1  -0.02 [ -0.04, -0.00] negligible | P1M0  -0.02 [ -0.05, +0.01] negligible | P1M1  -0.01 [ -0.04, +0.02] negligible
+      kin8nm    P0M0  +0.00 [ -0.00, +0.00] negligible | P0M1  +0.00 [ -0.00, +0.01] negligible | P1M0  +0.00 [ -0.00, +0.00] negligible | P1M1  -0.00 [ -0.00, +0.00] negligible
+      protein   P0M0  +0.00 [ -0.00, +0.00] negligible | P0M1  +0.00 [ -0.00, +0.00] negligible | P1M0  -0.01 [ -0.02, +0.01] negligible | P1M1  -0.01 [ -0.02, -0.00] negligible
+
+  combined-Q vs uniform-donor   -- does the combined method help overall?
+    S configuration: primary
+      concrete  P0M0  +0.13 [ -0.03, +0.28] negligible | P0M1  +0.02 [ -0.14, +0.17] negligible | P1M0  +0.16 [ +0.01, +0.31] negligible | P1M1  +0.07 [ -0.07, +0.21] negligible
+      wine      P0M0  -0.00 [ -0.08, +0.08] negligible | P0M1  -0.01 [ -0.10, +0.08] negligible | P1M0  -0.05 [ -0.16, +0.06] negligible | P1M1  -0.07 [ -0.10, -0.04] negligible
+      kin8nm    P0M0  +0.06 [ +0.04, +0.08] negligible | P0M1  +0.04 [ +0.03, +0.05] negligible | P1M0  +0.06 [ +0.03, +0.09] negligible | P1M1  +0.04 [ +0.02, +0.06] negligible
+      protein   P0M0  +0.02 [ +0.01, +0.04] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.00 [ -0.02, +0.02] negligible | P1M1  +0.00 [ -0.02, +0.02] negligible
+    S configuration: robust
+      concrete  P0M0  +0.13 [ -0.04, +0.29] negligible | P0M1  +0.02 [ -0.14, +0.18] negligible | P1M0  +0.08 [ -0.07, +0.24] negligible | P1M1  +0.12 [ -0.02, +0.26] negligible
+      wine      P0M0  -0.00 [ -0.08, +0.07] negligible | P0M1  -0.01 [ -0.11, +0.08] negligible | P1M0  -0.03 [ -0.12, +0.06] negligible | P1M1  -0.06 [ -0.09, -0.03] negligible
+      kin8nm    P0M0  +0.06 [ +0.04, +0.08] negligible | P0M1  +0.04 [ +0.03, +0.05] negligible | P1M0  +0.05 [ +0.02, +0.07] negligible | P1M1  +0.02 [ +0.01, +0.04] negligible
+      protein   P0M0  +0.02 [ +0.01, +0.04] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.00 [ -0.02, +0.02] negligible | P1M1  -0.00 [ -0.02, +0.02] negligible
+
+==============================================================================================================
+SAME COMPARISONS AT t1 (immediately after mixing)
+
+  combined-Q vs coverage-W_H
+      primary concrete  P0M0  -0.06 [ -0.68, +0.55] negligible | P0M1  +0.13 [ -0.56, +0.81] negligible | P1M0  -0.30 [ -0.65, +0.05] negligible | P1M1  -0.07 [ -0.57, +0.43] negligible
+      primary wine      P0M0  -0.37 [ -0.61, -0.14] negligible | P0M1  -0.16 [ -0.38, +0.07] negligible | P1M0  -0.15 [ -0.40, +0.11] negligible | P1M1  -0.03 [ -0.23, +0.17] negligible
+      primary kin8nm    P0M0  -0.23 [ -0.28, -0.18] negligible | P0M1  -0.14 [ -0.16, -0.11] negligible | P1M0  -0.21 [ -0.31, -0.10] negligible | P1M1  -0.10 [ -0.14, -0.06] negligible
+      primary protein   P0M0  -0.09 [ -0.15, -0.03] negligible | P0M1  +0.01 [ -0.02, +0.03] negligible | P1M0  -0.03 [ -0.07, +0.01] negligible | P1M1  -0.04 [ -0.08, -0.01] negligible
+      robust  concrete  P0M0  -0.07 [ -0.67, +0.54] negligible | P0M1  +0.12 [ -0.55, +0.80] negligible | P1M0  -0.30 [ -0.66, +0.07] negligible | P1M1  -0.08 [ -0.56, +0.41] negligible
+      robust  wine      P0M0  -0.37 [ -0.61, -0.14] negligible | P0M1  -0.16 [ -0.38, +0.07] negligible | P1M0  -0.15 [ -0.43, +0.12] negligible | P1M1  -0.04 [ -0.25, +0.16] negligible
+      robust  kin8nm    P0M0  -0.23 [ -0.28, -0.18] negligible | P0M1  -0.14 [ -0.16, -0.11] negligible | P1M0  -0.23 [ -0.34, -0.11] negligible | P1M1  -0.12 [ -0.17, -0.07] negligible
+      robust  protein   P0M0  -0.09 [ -0.15, -0.03] negligible | P0M1  +0.01 [ -0.02, +0.03] negligible | P1M0  -0.03 [ -0.07, +0.01] negligible | P1M1  -0.04 [ -0.08, -0.01] negligible
+
+  combined-Q vs population-S
+      primary concrete  P0M0  +0.10 [ -0.20, +0.39] negligible | P0M1  -0.00 [ -0.29, +0.29] negligible | P1M0  +0.20 [ -0.02, +0.43] negligible | P1M1  +0.03 [ -0.21, +0.26] negligible
+      primary wine      P0M0  +0.12 [ +0.02, +0.22] negligible | P0M1  +0.07 [ -0.05, +0.19] negligible | P1M0  +0.01 [ -0.13, +0.15] negligible | P1M1  -0.00 [ -0.12, +0.11] negligible
+      primary kin8nm    P0M0  +0.08 [ +0.07, +0.10] negligible | P0M1  +0.06 [ +0.05, +0.08] negligible | P1M0  +0.08 [ +0.04, +0.12] negligible | P1M1  +0.05 [ +0.03, +0.07] negligible
+      primary protein   P0M0  +0.05 [ +0.02, +0.07] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.02 [ +0.01, +0.03] negligible | P1M1  +0.02 [ +0.01, +0.04] negligible
+      robust  concrete  P0M0  +0.10 [ -0.19, +0.39] negligible | P0M1  -0.00 [ -0.29, +0.28] negligible | P1M0  +0.19 [ -0.03, +0.41] negligible | P1M1  +0.03 [ -0.17, +0.24] negligible
+      robust  wine      P0M0  +0.12 [ +0.02, +0.22] negligible | P0M1  +0.07 [ -0.05, +0.19] negligible | P1M0  +0.01 [ -0.13, +0.15] negligible | P1M1  +0.00 [ -0.11, +0.12] negligible
+      robust  kin8nm    P0M0  +0.08 [ +0.07, +0.10] negligible | P0M1  +0.06 [ +0.05, +0.08] negligible | P1M0  +0.07 [ +0.04, +0.11] negligible | P1M1  +0.05 [ +0.03, +0.07] negligible
+      robust  protein   P0M0  +0.05 [ +0.02, +0.07] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.02 [ +0.01, +0.03] negligible | P1M1  +0.02 [ +0.01, +0.04] negligible
+
+  combined-Q vs combined-Q-marginal
+      primary concrete  P0M0  -0.15 [ -0.30, +0.00] negligible | P0M1  -0.23 [ -0.48, +0.01] negligible | P1M0  -0.07 [ -0.16, +0.01] negligible | P1M1  -0.17 [ -0.37, +0.03] negligible
+      primary wine      P0M0  +0.01 [ +0.00, +0.03] negligible | P0M1  +0.01 [ -0.02, +0.03] negligible | P1M0  +0.01 [ -0.01, +0.02] negligible | P1M1  +0.00 [ -0.03, +0.03] negligible
+      primary kin8nm    P0M0  -0.00 [ -0.00, -0.00] negligible | P0M1  -0.02 [ -0.02, -0.01] negligible | P1M0  +0.00 [ +0.00, +0.00] negligible | P1M1  -0.01 [ -0.02, -0.01] negligible
+      primary protein   P0M0  -0.01 [ -0.02, -0.00] negligible | P0M1  -0.03 [ -0.04, -0.02] negligible | P1M0  -0.02 [ -0.03, -0.00] negligible | P1M1  -0.01 [ -0.02, -0.00] negligible
+      robust  concrete  P0M0  -0.15 [ -0.29, +0.00] negligible | P0M1  -0.23 [ -0.48, +0.01] negligible | P1M0  -0.07 [ -0.14, +0.01] negligible | P1M1  -0.16 [ -0.35, +0.03] negligible
+      robust  wine      P0M0  +0.01 [ +0.00, +0.03] negligible | P0M1  +0.01 [ -0.02, +0.03] negligible | P1M0  +0.00 [ -0.01, +0.02] negligible | P1M1  +0.00 [ -0.03, +0.03] negligible
+      robust  kin8nm    P0M0  -0.00 [ -0.00, -0.00] negligible | P0M1  -0.02 [ -0.02, -0.01] negligible | P1M0  -0.00 [ -0.00, -0.00] negligible | P1M1  -0.01 [ -0.02, -0.01] negligible
+      robust  protein   P0M0  -0.01 [ -0.02, -0.00] negligible | P0M1  -0.03 [ -0.04, -0.02] negligible | P1M0  -0.02 [ -0.03, -0.00] negligible | P1M1  -0.01 [ -0.02, -0.00] negligible
+
+  population-S vs uniform-donor
+      primary concrete  P0M0  -0.01 [ -0.04, +0.03] negligible | P0M1  -0.00 [ -0.02, +0.02] negligible | P1M0  -0.02 [ -0.10, +0.05] negligible | P1M1  +0.02 [ -0.08, +0.12] negligible
+      primary wine      P0M0  +0.00 [ -0.01, +0.02] negligible | P0M1  +0.00 [ -0.02, +0.02] negligible | P1M0  +0.02 [ -0.05, +0.08] negligible | P1M1  +0.03 [ -0.02, +0.08] negligible
+      primary kin8nm    P0M0  +0.00 [ -0.00, +0.00] negligible | P0M1  +0.00 [ +0.00, +0.00] negligible | P1M0  +0.02 [ +0.01, +0.03] negligible | P1M1  +0.02 [ -0.00, +0.04] negligible
+      primary protein   P0M0  +0.00 [ -0.00, +0.00] negligible | P0M1  -0.00 [ -0.00, +0.00] negligible | P1M0  -0.00 [ -0.02, +0.02] negligible | P1M1  -0.01 [ -0.03, +0.01] negligible
+      robust  concrete  P0M0  -0.01 [ -0.04, +0.03] negligible | P0M1  -0.01 [ -0.03, +0.02] negligible | P1M0  -0.00 [ -0.04, +0.03] negligible | P1M1  +0.00 [ -0.03, +0.04] negligible
+      robust  wine      P0M0  +0.00 [ -0.02, +0.02] negligible | P0M1  +0.00 [ -0.02, +0.02] negligible | P1M0  +0.01 [ -0.01, +0.03] negligible | P1M1  +0.01 [ -0.01, +0.03] negligible
+      robust  kin8nm    P0M0  +0.00 [ -0.00, +0.00] negligible | P0M1  +0.00 [ -0.00, +0.00] negligible | P1M0  -0.00 [ -0.00, +0.00] negligible | P1M1  +0.00 [ -0.00, +0.00] negligible
+      robust  protein   P0M0  -0.00 [ -0.00, +0.00] negligible | P0M1  +0.00 [ -0.00, +0.00] negligible | P1M0  -0.00 [ -0.02, +0.02] negligible | P1M1  -0.01 [ -0.03, +0.01] negligible
+
+  combined-Q vs uniform-donor
+      primary concrete  P0M0  +0.09 [ -0.18, +0.37] negligible | P0M1  -0.01 [ -0.29, +0.28] negligible | P1M0  +0.18 [ -0.06, +0.42] negligible | P1M1  +0.04 [ -0.17, +0.25] negligible
+      primary wine      P0M0  +0.12 [ +0.02, +0.22] negligible | P0M1  +0.07 [ -0.05, +0.20] negligible | P1M0  +0.03 [ -0.15, +0.20] negligible | P1M1  +0.03 [ -0.11, +0.17] negligible
+      primary kin8nm    P0M0  +0.08 [ +0.07, +0.10] negligible | P0M1  +0.06 [ +0.05, +0.08] negligible | P1M0  +0.09 [ +0.05, +0.14] negligible | P1M1  +0.07 [ +0.03, +0.10] negligible
+      primary protein   P0M0  +0.05 [ +0.02, +0.07] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.02 [ -0.00, +0.04] negligible | P1M1  +0.01 [ -0.00, +0.03] negligible
+      robust  concrete  P0M0  +0.09 [ -0.19, +0.38] negligible | P0M1  -0.01 [ -0.30, +0.28] negligible | P1M0  +0.18 [ -0.04, +0.41] negligible | P1M1  +0.04 [ -0.17, +0.25] negligible
+      robust  wine      P0M0  +0.12 [ +0.01, +0.22] negligible | P0M1  +0.07 [ -0.05, +0.19] negligible | P1M0  +0.02 [ -0.14, +0.17] negligible | P1M1  +0.02 [ -0.11, +0.14] negligible
+      robust  kin8nm    P0M0  +0.08 [ +0.07, +0.10] negligible | P0M1  +0.06 [ +0.05, +0.08] negligible | P1M0  +0.07 [ +0.04, +0.11] negligible | P1M1  +0.05 [ +0.03, +0.07] negligible
+      robust  protein   P0M0  +0.05 [ +0.02, +0.07] negligible | P0M1  +0.01 [ -0.00, +0.02] negligible | P1M0  +0.02 [ -0.00, +0.04] negligible | P1M1  +0.01 [ -0.00, +0.03] negligible
+
+==============================================================================================================
+MACRO RMSE (original units, mean over seeds x receivers, t2) and harmful transfer
+  primary concrete  P0M0: Q-Q=8.345 Q-Q-marginal=8.346 cov-W_H=8.360 cov-marginal=8.361 fedavg=8.328 local-only=8.639 population-S=8.332 uniform-donor=8.333
+          receiver-seeds harmed vs local-only (of 40): Q-Q=10 Q-Q-marginal=9 cov-W_H=11 cov-marginal=10 fedavg=14 population-S=9 uniform-donor=9; worst per-receiver loss -0.122
+  primary concrete  P0M1: Q-Q=8.512 Q-Q-marginal=8.524 cov-W_H=8.510 cov-marginal=8.542 fedavg=8.483 local-only=8.660 population-S=8.510 uniform-donor=8.510
+          receiver-seeds harmed vs local-only (of 40): Q-Q=15 Q-Q-marginal=13 cov-W_H=16 cov-marginal=15 fedavg=14 population-S=12 uniform-donor=12; worst per-receiver loss +0.131
+  primary concrete  P1M0: Q-Q=8.473 Q-Q-marginal=8.475 cov-W_H=8.485 cov-marginal=8.491 fedavg=8.509 local-only=8.712 population-S=8.463 uniform-donor=8.459
+          receiver-seeds harmed vs local-only (of 40): Q-Q=15 Q-Q-marginal=15 cov-W_H=16 cov-marginal=16 fedavg=14 population-S=15 uniform-donor=16; worst per-receiver loss +0.134
+  primary concrete  P1M1: Q-Q=8.361 Q-Q-marginal=8.366 cov-W_H=8.380 cov-marginal=8.383 fedavg=8.404 local-only=8.545 population-S=8.355 uniform-donor=8.355
+          receiver-seeds harmed vs local-only (of 40): Q-Q=14 Q-Q-marginal=14 cov-W_H=13 cov-marginal=14 fedavg=16 population-S=14 uniform-donor=14; worst per-receiver loss -0.008
+  primary wine      P0M0: Q-Q=0.658 Q-Q-marginal=0.658 cov-W_H=0.658 cov-marginal=0.658 fedavg=0.649 local-only=0.689 population-S=0.658 uniform-donor=0.658
+          receiver-seeds harmed vs local-only (of 40): Q-Q=6 Q-Q-marginal=6 cov-W_H=5 cov-marginal=5 fedavg=7 population-S=6 uniform-donor=6; worst per-receiver loss -0.027
+  primary wine      P0M1: Q-Q=0.662 Q-Q-marginal=0.662 cov-W_H=0.662 cov-marginal=0.662 fedavg=0.650 local-only=0.701 population-S=0.662 uniform-donor=0.662
+          receiver-seeds harmed vs local-only (of 40): Q-Q=2 Q-Q-marginal=2 cov-W_H=3 cov-marginal=3 fedavg=4 population-S=2 uniform-donor=2; worst per-receiver loss -0.023
+  primary wine      P1M0: Q-Q=0.675 Q-Q-marginal=0.675 cov-W_H=0.674 cov-marginal=0.675 fedavg=0.668 local-only=0.705 population-S=0.675 uniform-donor=0.675
+          receiver-seeds harmed vs local-only (of 40): Q-Q=2 Q-Q-marginal=2 cov-W_H=3 cov-marginal=3 fedavg=7 population-S=2 uniform-donor=2; worst per-receiver loss -0.024
+  primary wine      P1M1: Q-Q=0.671 Q-Q-marginal=0.671 cov-W_H=0.670 cov-marginal=0.670 fedavg=0.666 local-only=0.696 population-S=0.672 uniform-donor=0.672
+          receiver-seeds harmed vs local-only (of 40): Q-Q=4 Q-Q-marginal=4 cov-W_H=5 cov-marginal=4 fedavg=6 population-S=4 uniform-donor=4; worst per-receiver loss -0.016
+  primary kin8nm    P0M0: Q-Q=0.203 Q-Q-marginal=0.203 cov-W_H=0.204 cov-marginal=0.204 fedavg=0.204 local-only=0.203 population-S=0.203 uniform-donor=0.203
+          receiver-seeds harmed vs local-only (of 40): Q-Q=27 Q-Q-marginal=27 cov-W_H=27 cov-marginal=27 fedavg=27 population-S=27 uniform-donor=27; worst per-receiver loss +0.003
+  primary kin8nm    P0M1: Q-Q=0.203 Q-Q-marginal=0.203 cov-W_H=0.203 cov-marginal=0.203 fedavg=0.203 local-only=0.202 population-S=0.203 uniform-donor=0.203
+          receiver-seeds harmed vs local-only (of 40): Q-Q=26 Q-Q-marginal=27 cov-W_H=27 cov-marginal=27 fedavg=27 population-S=26 uniform-donor=25; worst per-receiver loss +0.003
+  primary kin8nm    P1M0: Q-Q=0.202 Q-Q-marginal=0.202 cov-W_H=0.203 cov-marginal=0.203 fedavg=0.203 local-only=0.202 population-S=0.202 uniform-donor=0.202
+          receiver-seeds harmed vs local-only (of 40): Q-Q=27 Q-Q-marginal=28 cov-W_H=29 cov-marginal=29 fedavg=27 population-S=27 uniform-donor=26; worst per-receiver loss +0.003
+  primary kin8nm    P1M1: Q-Q=0.202 Q-Q-marginal=0.202 cov-W_H=0.202 cov-marginal=0.202 fedavg=0.202 local-only=0.201 population-S=0.202 uniform-donor=0.202
+          receiver-seeds harmed vs local-only (of 40): Q-Q=28 Q-Q-marginal=29 cov-W_H=29 cov-marginal=29 fedavg=29 population-S=28 uniform-donor=28; worst per-receiver loss +0.003
+  primary protein   P0M0: Q-Q=5.277 Q-Q-marginal=5.278 cov-W_H=5.279 cov-marginal=5.280 fedavg=5.286 local-only=5.261 population-S=5.276 uniform-donor=5.276
+          receiver-seeds harmed vs local-only (of 40): Q-Q=32 Q-Q-marginal=32 cov-W_H=32 cov-marginal=33 fedavg=33 population-S=32 uniform-donor=32; worst per-receiver loss +0.032
+  primary protein   P0M1: Q-Q=5.281 Q-Q-marginal=5.282 cov-W_H=5.281 cov-marginal=5.284 fedavg=5.290 local-only=5.268 population-S=5.281 uniform-donor=5.281
+          receiver-seeds harmed vs local-only (of 40): Q-Q=34 Q-Q-marginal=34 cov-W_H=34 cov-marginal=35 fedavg=35 population-S=34 uniform-donor=34; worst per-receiver loss +0.030
+  primary protein   P1M0: Q-Q=5.246 Q-Q-marginal=5.246 cov-W_H=5.246 cov-marginal=5.247 fedavg=5.261 local-only=5.221 population-S=5.245 uniform-donor=5.246
+          receiver-seeds harmed vs local-only (of 40): Q-Q=37 Q-Q-marginal=37 cov-W_H=37 cov-marginal=37 fedavg=38 population-S=37 uniform-donor=37; worst per-receiver loss +0.067
+  primary protein   P1M1: Q-Q=5.252 Q-Q-marginal=5.253 cov-W_H=5.252 cov-marginal=5.253 fedavg=5.267 local-only=5.229 population-S=5.251 uniform-donor=5.252
+          receiver-seeds harmed vs local-only (of 40): Q-Q=37 Q-Q-marginal=37 cov-W_H=37 cov-marginal=37 fedavg=38 population-S=37 uniform-donor=38; worst per-receiver loss +0.065
+  robust  concrete  P0M0: Q-Q=8.345 Q-Q-marginal=8.347 cov-W_H=8.360 cov-marginal=8.361 fedavg=8.328 local-only=8.639 population-S=8.333 uniform-donor=8.333
+          receiver-seeds harmed vs local-only (of 40): Q-Q=10 Q-Q-marginal=10 cov-W_H=11 cov-marginal=10 fedavg=14 population-S=9 uniform-donor=9; worst per-receiver loss -0.122
+  robust  concrete  P0M1: Q-Q=8.513 Q-Q-marginal=8.523 cov-W_H=8.510 cov-marginal=8.542 fedavg=8.483 local-only=8.660 population-S=8.510 uniform-donor=8.510
+          receiver-seeds harmed vs local-only (of 40): Q-Q=15 Q-Q-marginal=13 cov-W_H=16 cov-marginal=15 fedavg=14 population-S=12 uniform-donor=12; worst per-receiver loss +0.131
+  robust  concrete  P1M0: Q-Q=8.467 Q-Q-marginal=8.472 cov-W_H=8.485 cov-marginal=8.491 fedavg=8.509 local-only=8.712 population-S=8.460 uniform-donor=8.459
+          receiver-seeds harmed vs local-only (of 40): Q-Q=16 Q-Q-marginal=15 cov-W_H=16 cov-marginal=16 fedavg=14 population-S=15 uniform-donor=16; worst per-receiver loss +0.134
+  robust  concrete  P1M1: Q-Q=8.366 Q-Q-marginal=8.366 cov-W_H=8.380 cov-marginal=8.383 fedavg=8.404 local-only=8.545 population-S=8.356 uniform-donor=8.355
+          receiver-seeds harmed vs local-only (of 40): Q-Q=14 Q-Q-marginal=14 cov-W_H=13 cov-marginal=14 fedavg=16 population-S=14 uniform-donor=14; worst per-receiver loss -0.008
+  robust  wine      P0M0: Q-Q=0.658 Q-Q-marginal=0.658 cov-W_H=0.658 cov-marginal=0.658 fedavg=0.649 local-only=0.689 population-S=0.658 uniform-donor=0.658
+          receiver-seeds harmed vs local-only (of 40): Q-Q=6 Q-Q-marginal=6 cov-W_H=5 cov-marginal=5 fedavg=7 population-S=6 uniform-donor=6; worst per-receiver loss -0.027
+  robust  wine      P0M1: Q-Q=0.662 Q-Q-marginal=0.662 cov-W_H=0.662 cov-marginal=0.662 fedavg=0.650 local-only=0.701 population-S=0.662 uniform-donor=0.662
+          receiver-seeds harmed vs local-only (of 40): Q-Q=2 Q-Q-marginal=2 cov-W_H=3 cov-marginal=3 fedavg=4 population-S=2 uniform-donor=2; worst per-receiver loss -0.023
+  robust  wine      P1M0: Q-Q=0.675 Q-Q-marginal=0.675 cov-W_H=0.674 cov-marginal=0.675 fedavg=0.668 local-only=0.705 population-S=0.675 uniform-donor=0.675
+          receiver-seeds harmed vs local-only (of 40): Q-Q=3 Q-Q-marginal=3 cov-W_H=3 cov-marginal=3 fedavg=7 population-S=2 uniform-donor=2; worst per-receiver loss -0.024
+  robust  wine      P1M1: Q-Q=0.671 Q-Q-marginal=0.671 cov-W_H=0.670 cov-marginal=0.670 fedavg=0.666 local-only=0.696 population-S=0.672 uniform-donor=0.672
+          receiver-seeds harmed vs local-only (of 40): Q-Q=4 Q-Q-marginal=4 cov-W_H=5 cov-marginal=4 fedavg=6 population-S=4 uniform-donor=4; worst per-receiver loss -0.015
+  robust  kin8nm    P0M0: Q-Q=0.203 Q-Q-marginal=0.203 cov-W_H=0.204 cov-marginal=0.204 fedavg=0.204 local-only=0.203 population-S=0.203 uniform-donor=0.203
+          receiver-seeds harmed vs local-only (of 40): Q-Q=27 Q-Q-marginal=27 cov-W_H=27 cov-marginal=27 fedavg=27 population-S=27 uniform-donor=27; worst per-receiver loss +0.003
+  robust  kin8nm    P0M1: Q-Q=0.203 Q-Q-marginal=0.203 cov-W_H=0.203 cov-marginal=0.203 fedavg=0.203 local-only=0.202 population-S=0.203 uniform-donor=0.203
+          receiver-seeds harmed vs local-only (of 40): Q-Q=27 Q-Q-marginal=27 cov-W_H=27 cov-marginal=27 fedavg=27 population-S=25 uniform-donor=25; worst per-receiver loss +0.003
+  robust  kin8nm    P1M0: Q-Q=0.202 Q-Q-marginal=0.202 cov-W_H=0.203 cov-marginal=0.203 fedavg=0.203 local-only=0.202 population-S=0.202 uniform-donor=0.202
+          receiver-seeds harmed vs local-only (of 40): Q-Q=27 Q-Q-marginal=27 cov-W_H=29 cov-marginal=29 fedavg=27 population-S=26 uniform-donor=26; worst per-receiver loss +0.003
+  robust  kin8nm    P1M1: Q-Q=0.202 Q-Q-marginal=0.202 cov-W_H=0.202 cov-marginal=0.202 fedavg=0.202 local-only=0.201 population-S=0.202 uniform-donor=0.202
+          receiver-seeds harmed vs local-only (of 40): Q-Q=28 Q-Q-marginal=28 cov-W_H=29 cov-marginal=29 fedavg=29 population-S=28 uniform-donor=28; worst per-receiver loss +0.003
+  robust  protein   P0M0: Q-Q=5.277 Q-Q-marginal=5.278 cov-W_H=5.279 cov-marginal=5.280 fedavg=5.286 local-only=5.261 population-S=5.276 uniform-donor=5.276
+          receiver-seeds harmed vs local-only (of 40): Q-Q=32 Q-Q-marginal=32 cov-W_H=32 cov-marginal=33 fedavg=33 population-S=32 uniform-donor=32; worst per-receiver loss +0.032
+  robust  protein   P0M1: Q-Q=5.281 Q-Q-marginal=5.282 cov-W_H=5.281 cov-marginal=5.284 fedavg=5.290 local-only=5.268 population-S=5.281 uniform-donor=5.281
+          receiver-seeds harmed vs local-only (of 40): Q-Q=34 Q-Q-marginal=34 cov-W_H=34 cov-marginal=35 fedavg=35 population-S=34 uniform-donor=34; worst per-receiver loss +0.030
+  robust  protein   P1M0: Q-Q=5.246 Q-Q-marginal=5.246 cov-W_H=5.246 cov-marginal=5.247 fedavg=5.261 local-only=5.221 population-S=5.245 uniform-donor=5.246
+          receiver-seeds harmed vs local-only (of 40): Q-Q=37 Q-Q-marginal=37 cov-W_H=37 cov-marginal=37 fedavg=38 population-S=37 uniform-donor=37; worst per-receiver loss +0.067
+  robust  protein   P1M1: Q-Q=5.252 Q-Q-marginal=5.252 cov-W_H=5.252 cov-marginal=5.253 fedavg=5.267 local-only=5.229 population-S=5.251 uniform-donor=5.252
+          receiver-seeds harmed vs local-only (of 40): Q-Q=37 Q-Q-marginal=37 cov-W_H=37 cov-marginal=37 fedavg=38 population-S=37 uniform-donor=38; worst per-receiver loss +0.065
+
+==============================================================================================================
+SCORE VARIATION AND REALISED WEIGHT VARIATION (mean over receiver-seeds)
+  score range = max-min across the 3 donors; weight range likewise (uniform = 0.333)
+  primary concrete  P0M0: W_marg 0.395/0.218  W_H 0.348/0.317  S 0.031/0.012  Q 0.175/0.092  Q_marg 0.202/0.091
+  primary concrete  P0M1: W_marg 0.395/0.218  W_H 0.424/0.351  S 0.031/0.012  Q 0.214/0.109  Q_marg 0.202/0.091
+  primary concrete  P1M0: W_marg 0.394/0.217  W_H 0.347/0.313  S 0.149/0.063  Q 0.216/0.122  Q_marg 0.267/0.128
+  primary concrete  P1M1: W_marg 0.394/0.217  W_H 0.416/0.341  S 0.149/0.063  Q 0.240/0.129  Q_marg 0.267/0.128
+  primary wine      P0M0: W_marg 0.453/0.252  W_H 0.398/0.356  S 0.022/0.008  Q 0.201/0.107  Q_marg 0.229/0.104
+  primary wine      P0M1: W_marg 0.453/0.252  W_H 0.315/0.226  S 0.022/0.008  Q 0.159/0.079  Q_marg 0.229/0.104
+  primary wine      P1M0: W_marg 0.453/0.252  W_H 0.400/0.358  S 0.113/0.047  Q 0.252/0.143  Q_marg 0.280/0.133
+  primary wine      P1M1: W_marg 0.453/0.252  W_H 0.313/0.225  S 0.113/0.047  Q 0.209/0.111  Q_marg 0.280/0.133
+  primary kin8nm    P0M0: W_marg 0.462/0.257  W_H 0.385/0.360  S 0.011/0.004  Q 0.195/0.099  Q_marg 0.234/0.101
+  primary kin8nm    P0M1: W_marg 0.462/0.257  W_H 0.321/0.246  S 0.011/0.004  Q 0.163/0.078  Q_marg 0.234/0.101
+  primary kin8nm    P1M0: W_marg 0.462/0.257  W_H 0.385/0.360  S 0.139/0.054  Q 0.260/0.142  Q_marg 0.299/0.137
+  primary kin8nm    P1M1: W_marg 0.462/0.257  W_H 0.321/0.246  S 0.139/0.054  Q 0.228/0.117  Q_marg 0.299/0.137
+  primary protein   P0M0: W_marg 0.395/0.219  W_H 0.347/0.317  S 0.004/0.001  Q 0.174/0.084  Q_marg 0.198/0.084
+  primary protein   P0M1: W_marg 0.395/0.219  W_H 0.422/0.350  S 0.004/0.001  Q 0.211/0.100  Q_marg 0.198/0.084
+  primary protein   P1M0: W_marg 0.395/0.219  W_H 0.347/0.317  S 0.363/0.164  Q 0.328/0.200  Q_marg 0.379/0.189
+  primary protein   P1M1: W_marg 0.395/0.219  W_H 0.423/0.351  S 0.363/0.164  Q 0.319/0.179  Q_marg 0.379/0.189
+  robust  concrete  P0M0: W_marg 0.395/0.218  W_H 0.348/0.317  S 0.033/0.013  Q 0.177/0.092  Q_marg 0.203/0.091
+  robust  concrete  P0M1: W_marg 0.395/0.218  W_H 0.424/0.351  S 0.033/0.013  Q 0.216/0.110  Q_marg 0.203/0.091
+  robust  concrete  P1M0: W_marg 0.394/0.217  W_H 0.347/0.313  S 0.052/0.020  Q 0.180/0.095  Q_marg 0.217/0.099
+  robust  concrete  P1M1: W_marg 0.394/0.217  W_H 0.416/0.341  S 0.052/0.020  Q 0.215/0.110  Q_marg 0.217/0.099
+  robust  wine      P0M0: W_marg 0.453/0.252  W_H 0.398/0.356  S 0.025/0.010  Q 0.202/0.108  Q_marg 0.230/0.104
+  robust  wine      P0M1: W_marg 0.453/0.252  W_H 0.315/0.226  S 0.025/0.010  Q 0.160/0.080  Q_marg 0.230/0.104
+  robust  wine      P1M0: W_marg 0.453/0.252  W_H 0.400/0.358  S 0.050/0.020  Q 0.220/0.120  Q_marg 0.247/0.114
+  robust  wine      P1M1: W_marg 0.453/0.252  W_H 0.313/0.225  S 0.050/0.020  Q 0.177/0.090  Q_marg 0.247/0.114
+  robust  kin8nm    P0M0: W_marg 0.462/0.257  W_H 0.385/0.360  S 0.012/0.004  Q 0.195/0.099  Q_marg 0.234/0.101
+  robust  kin8nm    P0M1: W_marg 0.462/0.257  W_H 0.321/0.246  S 0.012/0.004  Q 0.163/0.079  Q_marg 0.234/0.101
+  robust  kin8nm    P1M0: W_marg 0.462/0.257  W_H 0.385/0.360  S 0.010/0.004  Q 0.193/0.098  Q_marg 0.232/0.100
+  robust  kin8nm    P1M1: W_marg 0.462/0.257  W_H 0.321/0.246  S 0.010/0.004  Q 0.161/0.078  Q_marg 0.232/0.100
+  robust  protein   P0M0: W_marg 0.395/0.219  W_H 0.347/0.317  S 0.004/0.001  Q 0.174/0.084  Q_marg 0.198/0.084
+  robust  protein   P0M1: W_marg 0.395/0.219  W_H 0.422/0.350  S 0.004/0.001  Q 0.211/0.100  Q_marg 0.198/0.084
+  robust  protein   P1M0: W_marg 0.395/0.219  W_H 0.347/0.317  S 0.312/0.135  Q 0.302/0.177  Q_marg 0.353/0.172
+  robust  protein   P1M1: W_marg 0.395/0.219  W_H 0.423/0.351  S 0.312/0.135  Q 0.293/0.159  Q_marg 0.353/0.172
+
+==============================================================================================================
+DONOR-SCORE AGREEMENT WITH MEASURED TRANSFER BENEFIT U (retrospective; never used to build scores)
+  top donor by score == top donor by U, of receiver-seeds; and mean Kendall tau
+  primary concrete  P0M0: W_marg 9/40 tau -0.19  W_H 12/40 tau +0.00  S 13/40 tau -0.05  Q 12/40 tau -0.05  Q_marg 9/40 tau -0.25
+  primary concrete  P0M1: W_marg 13/40 tau -0.14  W_H 14/40 tau -0.03  S 20/40 tau +0.13  Q 13/40 tau -0.07  Q_marg 13/40 tau -0.10
+  primary concrete  P1M0: W_marg 5/40 tau -0.24  W_H 13/40 tau -0.08  S 13/40 tau +0.05  Q 12/40 tau -0.03  Q_marg 13/40 tau -0.15
+  primary concrete  P1M1: W_marg 10/40 tau -0.10  W_H 13/40 tau -0.03  S 14/40 tau +0.03  Q 10/40 tau -0.00  Q_marg 14/40 tau +0.00
+  primary wine      P0M0: W_marg 10/40 tau -0.10  W_H 10/40 tau -0.15  S 12/40 tau -0.02  Q 9/40 tau -0.12  Q_marg 10/40 tau -0.07
+  primary wine      P0M1: W_marg 13/40 tau -0.02  W_H 12/40 tau -0.07  S 9/40 tau -0.30  Q 5/40 tau -0.18  Q_marg 6/40 tau -0.15
+  primary wine      P1M0: W_marg 17/40 tau +0.18  W_H 16/40 tau +0.12  S 20/40 tau +0.17  Q 20/40 tau +0.20  Q_marg 20/40 tau +0.20
+  primary wine      P1M1: W_marg 10/40 tau +0.21  W_H 16/40 tau +0.17  S 17/40 tau +0.18  Q 17/40 tau +0.22  Q_marg 17/40 tau +0.22
+  primary kin8nm    P0M0: W_marg 8/40 tau -0.45  W_H 4/40 tau -0.40  S 11/40 tau -0.05  Q 7/40 tau -0.30  Q_marg 7/40 tau -0.30
+  primary kin8nm    P0M1: W_marg 12/40 tau -0.39  W_H 8/40 tau -0.32  S 6/40 tau -0.27  Q 7/40 tau -0.30  Q_marg 8/40 tau -0.29
+  primary kin8nm    P1M0: W_marg 10/40 tau -0.39  W_H 4/40 tau -0.35  S 7/40 tau -0.18  Q 7/40 tau -0.35  Q_marg 7/40 tau -0.35
+  primary kin8nm    P1M1: W_marg 5/40 tau -0.49  W_H 6/40 tau -0.45  S 7/40 tau -0.18  Q 7/40 tau -0.42  Q_marg 7/40 tau -0.42
+  primary protein   P0M0: W_marg 4/40 tau -0.52  W_H 22/40 tau +0.05  S 10/40 tau -0.10  Q 20/40 tau +0.02  Q_marg 3/40 tau -0.55
+  primary protein   P0M1: W_marg 5/40 tau -0.42  W_H 19/40 tau +0.02  S 18/40 tau +0.13  Q 22/40 tau +0.08  Q_marg 8/40 tau -0.38
+  primary protein   P1M0: W_marg 6/40 tau -0.46  W_H 17/40 tau -0.02  S 18/40 tau +0.10  Q 18/40 tau +0.15  Q_marg 18/40 tau -0.15
+  primary protein   P1M1: W_marg 8/40 tau -0.27  W_H 16/40 tau +0.08  S 19/40 tau +0.10  Q 19/40 tau +0.12  Q_marg 19/40 tau -0.05
+  robust  concrete  P0M0: W_marg 9/40 tau -0.19  W_H 12/40 tau +0.00  S 12/40 tau -0.10  Q 12/40 tau -0.10  Q_marg 11/40 tau -0.22
+  robust  concrete  P0M1: W_marg 13/40 tau -0.14  W_H 14/40 tau -0.03  S 13/40 tau +0.02  Q 12/40 tau -0.08  Q_marg 13/40 tau -0.10
+  robust  concrete  P1M0: W_marg 5/40 tau -0.24  W_H 13/40 tau -0.08  S 12/40 tau +0.03  Q 15/40 tau +0.03  Q_marg 13/40 tau -0.13
+  robust  concrete  P1M1: W_marg 10/40 tau -0.10  W_H 13/40 tau -0.03  S 13/40 tau -0.02  Q 10/40 tau -0.07  Q_marg 14/40 tau -0.05
+  robust  wine      P0M0: W_marg 10/40 tau -0.10  W_H 10/40 tau -0.15  S 13/40 tau +0.02  Q 10/40 tau -0.10  Q_marg 10/40 tau -0.07
+  robust  wine      P0M1: W_marg 13/40 tau -0.02  W_H 12/40 tau -0.07  S 12/40 tau -0.13  Q 6/40 tau -0.18  Q_marg 5/40 tau -0.18
+  robust  wine      P1M0: W_marg 17/40 tau +0.18  W_H 16/40 tau +0.12  S 19/40 tau +0.08  Q 20/40 tau +0.18  Q_marg 20/40 tau +0.20
+  robust  wine      P1M1: W_marg 10/40 tau +0.21  W_H 16/40 tau +0.17  S 16/40 tau +0.17  Q 16/40 tau +0.20  Q_marg 17/40 tau +0.22
+  robust  kin8nm    P0M0: W_marg 8/40 tau -0.45  W_H 4/40 tau -0.40  S 13/40 tau +0.02  Q 8/40 tau -0.30  Q_marg 9/40 tau -0.30
+  robust  kin8nm    P0M1: W_marg 12/40 tau -0.39  W_H 8/40 tau -0.32  S 7/40 tau -0.26  Q 5/40 tau -0.35  Q_marg 6/40 tau -0.33
+  robust  kin8nm    P1M0: W_marg 10/40 tau -0.39  W_H 4/40 tau -0.35  S 14/40 tau +0.06  Q 7/40 tau -0.30  Q_marg 8/40 tau -0.32
+  robust  kin8nm    P1M1: W_marg 5/40 tau -0.49  W_H 6/40 tau -0.45  S 19/40 tau +0.10  Q 7/40 tau -0.42  Q_marg 8/40 tau -0.38
+  robust  protein   P0M0: W_marg 4/40 tau -0.52  W_H 22/40 tau +0.05  S 10/40 tau -0.08  Q 21/40 tau +0.05  Q_marg 2/40 tau -0.57
+  robust  protein   P0M1: W_marg 5/40 tau -0.42  W_H 19/40 tau +0.02  S 18/40 tau +0.12  Q 21/40 tau +0.05  Q_marg 7/40 tau -0.40
+  robust  protein   P1M0: W_marg 6/40 tau -0.46  W_H 17/40 tau -0.02  S 18/40 tau +0.13  Q 18/40 tau +0.15  Q_marg 18/40 tau -0.15
+  robust  protein   P1M1: W_marg 8/40 tau -0.27  W_H 16/40 tau +0.08  S 19/40 tau +0.10  Q 19/40 tau +0.12  Q_marg 19/40 tau -0.05
+
+==============================================================================================================
+VALIDATION-SELECTED DONOR (diagnostic): best single-donor mix chosen on val, scored on test
+  primary concrete  P0M0: vs local-only  -3.87 [ -5.98, -1.77] unresolved; vs uniform-donor  -0.42 [ -1.42, +0.59] negligible
+  primary concrete  P0M1: vs local-only  -1.89 [ -4.47, +0.68] unresolved; vs uniform-donor  -0.39 [ -2.03, +1.24] unresolved
+  primary concrete  P1M0: vs local-only  -2.34 [ -4.84, +0.16] unresolved; vs uniform-donor  +0.47 [ -0.54, +1.48] negligible
+  primary concrete  P1M1: vs local-only  -3.07 [ -4.63, -1.50] unresolved; vs uniform-donor  -1.18 [ -2.27, -0.08] unresolved
+  primary wine      P0M0: vs local-only  -3.68 [ -4.70, -2.67] meaningful (; vs uniform-donor  +0.73 [ -0.05, +1.52] negligible
+  primary wine      P0M1: vs local-only  -5.39 [ -7.66, -3.13] meaningful (; vs uniform-donor  -0.17 [ -1.19, +0.86] negligible
+  primary wine      P1M0: vs local-only  -3.92 [ -5.36, -2.48] meaningful (; vs uniform-donor  +0.30 [ -0.43, +1.02] negligible
+  primary wine      P1M1: vs local-only  -2.93 [ -4.53, -1.33] unresolved; vs uniform-donor  +0.51 [ -0.21, +1.24] negligible
+  primary kin8nm    P0M0: vs local-only  -0.18 [ -0.45, +0.09] negligible; vs uniform-donor  -0.55 [ -0.79, -0.30] negligible
+  primary kin8nm    P0M1: vs local-only  -0.01 [ -0.26, +0.24] negligible; vs uniform-donor  -0.45 [ -0.65, -0.25] negligible
+  primary kin8nm    P1M0: vs local-only  -0.16 [ -0.47, +0.15] negligible; vs uniform-donor  -0.54 [ -0.74, -0.33] negligible
+  primary kin8nm    P1M1: vs local-only  +0.15 [ -0.19, +0.48] negligible; vs uniform-donor  -0.34 [ -0.47, -0.21] negligible
+  primary protein   P0M0: vs local-only  -0.01 [ -0.14, +0.12] negligible; vs uniform-donor  -0.30 [ -0.42, -0.19] negligible
+  primary protein   P0M1: vs local-only  +0.03 [ -0.07, +0.13] negligible; vs uniform-donor  -0.22 [ -0.29, -0.15] negligible
+  primary protein   P1M0: vs local-only  +0.27 [ +0.18, +0.36] negligible; vs uniform-donor  -0.20 [ -0.26, -0.15] negligible
+  primary protein   P1M1: vs local-only  +0.28 [ +0.20, +0.36] negligible; vs uniform-donor  -0.16 [ -0.22, -0.10] negligible
+  robust  concrete  P0M0: vs local-only  -3.87 [ -5.98, -1.77] unresolved; vs uniform-donor  -0.42 [ -1.42, +0.59] negligible
+  robust  concrete  P0M1: vs local-only  -1.89 [ -4.47, +0.68] unresolved; vs uniform-donor  -0.39 [ -2.03, +1.24] unresolved
+  robust  concrete  P1M0: vs local-only  -2.34 [ -4.84, +0.16] unresolved; vs uniform-donor  +0.47 [ -0.54, +1.48] negligible
+  robust  concrete  P1M1: vs local-only  -3.07 [ -4.63, -1.50] unresolved; vs uniform-donor  -1.18 [ -2.27, -0.08] unresolved
+  robust  wine      P0M0: vs local-only  -3.68 [ -4.70, -2.67] meaningful (; vs uniform-donor  +0.73 [ -0.05, +1.52] negligible
+  robust  wine      P0M1: vs local-only  -5.39 [ -7.66, -3.13] meaningful (; vs uniform-donor  -0.17 [ -1.19, +0.86] negligible
+  robust  wine      P1M0: vs local-only  -3.92 [ -5.36, -2.48] meaningful (; vs uniform-donor  +0.30 [ -0.43, +1.02] negligible
+  robust  wine      P1M1: vs local-only  -2.93 [ -4.53, -1.33] unresolved; vs uniform-donor  +0.51 [ -0.21, +1.24] negligible
+  robust  kin8nm    P0M0: vs local-only  -0.18 [ -0.45, +0.09] negligible; vs uniform-donor  -0.55 [ -0.79, -0.30] negligible
+  robust  kin8nm    P0M1: vs local-only  -0.01 [ -0.26, +0.24] negligible; vs uniform-donor  -0.45 [ -0.65, -0.25] negligible
+  robust  kin8nm    P1M0: vs local-only  -0.16 [ -0.47, +0.15] negligible; vs uniform-donor  -0.54 [ -0.74, -0.33] negligible
+  robust  kin8nm    P1M1: vs local-only  +0.15 [ -0.19, +0.48] negligible; vs uniform-donor  -0.34 [ -0.47, -0.21] negligible
+  robust  protein   P0M0: vs local-only  -0.01 [ -0.14, +0.12] negligible; vs uniform-donor  -0.30 [ -0.42, -0.19] negligible
+  robust  protein   P0M1: vs local-only  +0.03 [ -0.07, +0.13] negligible; vs uniform-donor  -0.22 [ -0.29, -0.15] negligible
+  robust  protein   P1M0: vs local-only  +0.27 [ +0.18, +0.36] negligible; vs uniform-donor  -0.20 [ -0.26, -0.15] negligible
+  robust  protein   P1M1: vs local-only  +0.28 [ +0.20, +0.36] negligible; vs uniform-donor  -0.16 [ -0.22, -0.10] negligible
+```
+
+### 10.5 Run index
+
+| dataset | condition | S config | run |
+|---|---|---|---|
+| protein | P0M0 | primary | `results/e5_eval_P0M0_primary/20260929_c3384c3_5ce1c027/` |
+| kin8nm | P0M0 | primary | `results/e5_eval_P0M0_primary/20260929_c3384c3_a1c465cc/` |
+| concrete | P0M0 | primary | `results/e5_eval_P0M0_primary/20260929_c3384c3_bf415a63/` |
+| wine | P0M0 | primary | `results/e5_eval_P0M0_primary/20260929_c3384c3_d1945a38/` |
+| wine | P0M0 | robust | `results/e5_eval_P0M0_robust/20260929_c3384c3_033b9e64/` |
+| kin8nm | P0M0 | robust | `results/e5_eval_P0M0_robust/20260929_c3384c3_33172f7d/` |
+| concrete | P0M0 | robust | `results/e5_eval_P0M0_robust/20260929_c3384c3_4b2b392d/` |
+| protein | P0M0 | robust | `results/e5_eval_P0M0_robust/20260929_c3384c3_71a604e1/` |
+| protein | P0M1 | primary | `results/e5_eval_P0M1_primary/20260929_c3384c3_05fab4a1/` |
+| kin8nm | P0M1 | primary | `results/e5_eval_P0M1_primary/20260929_c3384c3_51321b5a/` |
+| concrete | P0M1 | primary | `results/e5_eval_P0M1_primary/20260929_c3384c3_689b3eee/` |
+| wine | P0M1 | primary | `results/e5_eval_P0M1_primary/20260929_c3384c3_bf7533ad/` |
+| kin8nm | P0M1 | robust | `results/e5_eval_P0M1_robust/20260929_c3384c3_1dfe905b/` |
+| protein | P0M1 | robust | `results/e5_eval_P0M1_robust/20260929_c3384c3_1f9df73f/` |
+| concrete | P0M1 | robust | `results/e5_eval_P0M1_robust/20260929_c3384c3_5a09d96d/` |
+| wine | P0M1 | robust | `results/e5_eval_P0M1_robust/20260929_c3384c3_fba30728/` |
+| protein | P1M0 | primary | `results/e5_eval_P1M0_primary/20260929_c3384c3_53bbec40/` |
+| kin8nm | P1M0 | primary | `results/e5_eval_P1M0_primary/20260929_c3384c3_a6716f72/` |
+| wine | P1M0 | primary | `results/e5_eval_P1M0_primary/20260929_c3384c3_c06da70c/` |
+| concrete | P1M0 | primary | `results/e5_eval_P1M0_primary/20260929_c3384c3_c9759c31/` |
+| protein | P1M0 | robust | `results/e5_eval_P1M0_robust/20260929_c3384c3_04436307/` |
+| wine | P1M0 | robust | `results/e5_eval_P1M0_robust/20260929_c3384c3_30361cfd/` |
+| concrete | P1M0 | robust | `results/e5_eval_P1M0_robust/20260929_c3384c3_d17592cf/` |
+| kin8nm | P1M0 | robust | `results/e5_eval_P1M0_robust/20260929_c3384c3_f3b33b60/` |
+| concrete | P1M1 | primary | `results/e5_eval_P1M1_primary/20260929_c3384c3_255756d3/` |
+| wine | P1M1 | primary | `results/e5_eval_P1M1_primary/20260929_c3384c3_3016c5c1/` |
+| kin8nm | P1M1 | primary | `results/e5_eval_P1M1_primary/20260929_c3384c3_509ff537/` |
+| protein | P1M1 | primary | `results/e5_eval_P1M1_primary/20260929_c3384c3_b5b57fe4/` |
+| wine | P1M1 | robust | `results/e5_eval_P1M1_robust/20260929_c3384c3_1f739fcc/` |
+| kin8nm | P1M1 | robust | `results/e5_eval_P1M1_robust/20260929_c3384c3_32bdd241/` |
+| concrete | P1M1 | robust | `results/e5_eval_P1M1_robust/20260929_c3384c3_718114a8/` |
+| protein | P1M1 | robust | `results/e5_eval_P1M1_robust/20260929_c3384c3_ea06d3a3/` |
+
