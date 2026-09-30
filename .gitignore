@@ -11,6 +11,20 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# generated demo artifacts (shards contain per-client data)
+demo/_shards/
+demo/_out/
+
+# credentials and keys - NEVER commit
+demo/_certs/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets.*
+.env
+
 # editors / os
 .vscode/
 .idea/
