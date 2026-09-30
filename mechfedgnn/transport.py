@@ -36,10 +36,12 @@ class ServerApp:
 
     def __init__(self, coordinator: ServerCoordinator,
                  weights_for: Callable[[str, dict], tuple[np.ndarray, float]] | None = None,
-                 max_bytes: int = MAX_PAYLOAD_BYTES):
+                 max_bytes: int = MAX_PAYLOAD_BYTES, allowlist=None):
         self.coord = coordinator
         self.weights_for = weights_for
         self.max_bytes = max_bytes
+        # authentication says WHO; the allowlist says MAY THEY JOIN THIS EXPERIMENT
+        self.allowlist = allowlist
         self.lock = threading.Lock()
         self.rejections: list[dict] = []
 
@@ -49,6 +51,12 @@ class ServerApp:
             if len(blob) > self.max_bytes:
                 raise ProtocolError("payload too large")
             env, state = decode(blob, self.max_bytes)
+            if self.allowlist is not None:
+                try:
+                    self.allowlist.check(authenticated_id, env.experiment_id)
+                except PermissionError as e:
+                    self.rejections.append({"client": authenticated_id, "reason": "not_authorised"})
+                    return 403, self._err(str(e))
             with self.lock:
                 if route == "/v1/parent":
                     if env.client_id != authenticated_id:
