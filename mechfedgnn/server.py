@@ -40,6 +40,8 @@ class Reject(str, Enum):
     PARENT = "parent_version_mismatch"
     SCHEMA = "schema_mismatch"
     DUPLICATE = "duplicate_update"
+    ALREADY_REPORTED = "client_already_reported_this_round"
+    PREPROCESSING = "preprocessing_mismatch"
     MALFORMED = "malformed_payload"
 
 
@@ -60,6 +62,7 @@ class RoundState:
     updates: dict[str, dict] = field(default_factory=dict)     # client -> state
     counts: dict[str, int] = field(default_factory=dict)       # client -> declared n
     signatures: dict[str, dict] = field(default_factory=dict)  # client -> AGGREGATE summary
+    preprocessing: dict[str, str] = field(default_factory=dict)  # client -> declared coordinates
     accepted_ids: set[str] = field(default_factory=set)
     closed: bool = False
     opened_at: float = field(default_factory=time.monotonic)
@@ -72,6 +75,9 @@ class ServerCoordinator:
     schema: str
     round_timeout_s: float = 60.0
     on_timeout: str = "fail"                 # "fail" | "pause"
+    # When set, every update must declare THIS preprocessing identity. None means
+    # "the clients must agree with each other", which is the weaker check.
+    require_preprocessing_id: str | None = None
     aggregator: Any = field(default_factory=WeightedAverage)
     models: dict[str, dict] = field(default_factory=dict)      # client -> its parent model
     round: RoundState | None = None
@@ -122,10 +128,30 @@ class ServerCoordinator:
             raise UpdateRejected(Reject.SCHEMA, env.schema_id)
         if env.update_id in r.accepted_ids:
             raise UpdateRejected(Reject.DUPLICATE, env.update_id)
+        if env.client_id in r.updates:
+            # A DIFFERENT update from a client that has already reported. Accepting
+            # it would silently replace the first contribution and let one client
+            # choose which of its models is aggregated after seeing the round
+            # progress. One contribution per client per round; a correction needs
+            # a new round.
+            raise UpdateRejected(Reject.ALREADY_REPORTED, env.client_id)
 
         n = env.meta.get("n_train")
         if not isinstance(n, int) or n <= 0:
             raise UpdateRejected(Reject.MALFORMED, "declared sample count missing or invalid")
+        prep = env.meta.get("preprocessing_id")
+        if self.require_preprocessing_id is not None and prep != self.require_preprocessing_id:
+            # Parameters fitted in different input coordinates are not comparable,
+            # so averaging them is meaningless rather than merely noisy.
+            raise UpdateRejected(Reject.PREPROCESSING,
+                                 f"expected {self.require_preprocessing_id}, got {prep}")
+        if prep is not None:
+            agreed = {v for v in r.preprocessing.values()}
+            if agreed and prep not in agreed:
+                raise UpdateRejected(Reject.PREPROCESSING,
+                                     f"{env.client_id} declares {prep}, "
+                                     f"peers declare {sorted(agreed)[0]}")
+            r.preprocessing[env.client_id] = prep
         r.accepted_ids.add(env.update_id)
         r.updates[env.client_id] = dict(state)
         r.counts[env.client_id] = n
@@ -157,6 +183,11 @@ class ServerCoordinator:
         r = self.round
         if self.missing():
             raise RoundTimeout(f"round {r.round_id}: incomplete, missing {self.missing()}")
+        declared = set(r.preprocessing.values())
+        if len(declared) > 1:
+            raise ValueError(f"round {r.round_id}: clients declared different preprocessing "
+                             f"coordinates {sorted(declared)}; their parameters are not in a "
+                             f"common space and must not be averaged")
         order = list(self.clients)
         states = [r.updates[c] for c in order]
         new_models = {}

@@ -320,3 +320,120 @@ def test_independent_client_processes_complete_rounds(tmp_path):
         # declared sample counts are unequal, so weights must be non-uniform
         w = rnd[0]["weights"]
         assert len(set(np.round(list(w.values()), 6))) > 1
+
+
+# ---------------------------------------------------- one contribution per client
+
+def test_a_second_different_update_from_the_same_client_is_refused():
+    """Regression: a different update from a client that had already reported
+    was accepted and SILENTLY REPLACED its first contribution - letting one
+    client choose which of its models is aggregated after watching the round."""
+    coord, _ = make_coord()
+    first, second = tiny_state(9), tiny_state(77)
+    coord.submit(env_for(coord, "c0", first), first, "c0")
+    kept = coord.round.updates["c0"]["w"].copy()
+
+    with pytest.raises(UpdateRejected) as e:
+        coord.submit(env_for(coord, "c0", second), second, "c0")
+    assert e.value.reason is Reject.ALREADY_REPORTED
+
+    np.testing.assert_array_equal(coord.round.updates["c0"]["w"], kept)
+    assert len(coord.round.updates) == 1
+    assert coord.missing() == [c for c in coord.clients if c != "c0"]
+
+
+def test_an_identical_resend_is_still_a_duplicate_not_already_reported():
+    """The two rejections are different facts and must stay distinguishable:
+    a resend after an interruption is benign, a different model is not."""
+    coord, _ = make_coord()
+    s = tiny_state(9)
+    coord.submit(env_for(coord, "c0", s), s, "c0")
+    with pytest.raises(UpdateRejected) as e:
+        coord.submit(env_for(coord, "c0", s), s, "c0")
+    assert e.value.reason is Reject.DUPLICATE
+
+
+def test_the_round_still_completes_after_a_refused_second_update():
+    coord, _ = make_coord()
+    for i, c in enumerate(coord.clients):
+        s = tiny_state(2 + i)
+        coord.submit(env_for(coord, c, s), s, c)
+    other = tiny_state(99)
+    with pytest.raises(UpdateRejected):
+        coord.submit(env_for(coord, "c0", other), other, "c0")
+    models, record = coord.close_round(
+        lambda c, n: (_uniform(len(coord.clients), list(coord.clients).index(c)), 0.5))
+    assert set(models) == set(coord.clients) and len(record) == len(coord.clients)
+
+
+# ---------------------------------------------------- preprocessing agreement
+
+def test_clients_declaring_different_preprocessing_coordinates_are_refused():
+    """Averaging parameters fitted in different input coordinates is meaningless.
+
+    Regression: every client fitted its own feature/target scale and the server
+    averaged the results anyway.
+    """
+    coord, _ = make_coord()
+    a, b = tiny_state(3), tiny_state(4)
+    e_a = env_for(coord, "c0", a)
+    e_a.meta["preprocessing_id"] = "shared:abc123"
+    coord.submit(e_a, a, "c0")
+
+    e_b = env_for(coord, "c1", b)
+    e_b.meta["preprocessing_id"] = "per-client"
+    with pytest.raises(UpdateRejected) as e:
+        coord.submit(e_b, b, "c1")
+    assert e.value.reason is Reject.PREPROCESSING
+    assert "c1" not in coord.round.updates
+
+
+def test_a_required_preprocessing_identity_is_enforced_on_every_update():
+    coord, _ = make_coord()
+    coord.require_preprocessing_id = "shared:deadbeef"
+    s = tiny_state(3)
+    e = env_for(coord, "c0", s)
+    e.meta["preprocessing_id"] = "per-client"
+    with pytest.raises(UpdateRejected) as err:
+        coord.submit(e, s, "c0")
+    assert err.value.reason is Reject.PREPROCESSING
+
+    ok = env_for(coord, "c0", s)
+    ok.meta["preprocessing_id"] = "shared:deadbeef"
+    coord.submit(ok, s, "c0")
+    assert "c0" in coord.round.updates
+
+
+def test_shared_coordinates_put_every_client_in_the_same_input_space(tmp_path):
+    """The positive case: given shared coordinates, two clients with very
+    different local distributions standardise identically."""
+    from mechfedgnn.client_runtime import (ClientRuntime, preprocessing_id, save_client_shard,
+                                           shared_coordinates)
+    rng = np.random.default_rng(0)
+    shared = None
+    transforms = {}
+    for cid, shift, scale in (("c0", 0.0, 1.0), ("c1", 50.0, 9.0)):
+        X = rng.standard_normal((40, 3)) * scale + shift
+        M = np.ones((40, 3), np.int8)
+        y = X[:, 0] * scale + shift
+        folds = {"train": np.arange(24), "val": np.arange(24, 32), "test": np.arange(32, 40)}
+        p = save_client_shard(str(tmp_path / f"{cid}.npz"), X, M, y, folds,
+                              {"always_observed": [0], "maskable": [1, 2]}, cid)
+        if shared is None:
+            shared = shared_coordinates(X, M, y)
+        rt = ClientRuntime(client_id=cid, experiment_id="demo", shard_path=p, transport=None,
+                           shared_scale=shared)
+        rt.load()
+        transforms[cid] = rt.transform
+        assert rt.preprocessing_id == preprocessing_id(shared)
+
+    np.testing.assert_array_equal(transforms["c0"].mu, transforms["c1"].mu)
+    np.testing.assert_array_equal(transforms["c0"].sd, transforms["c1"].sd)
+    assert transforms["c0"].y_mu == transforms["c1"].y_mu
+
+    # and without them, the clients are NOT in a common space - declared as such
+    rt = ClientRuntime(client_id="c1", experiment_id="demo",
+                       shard_path=str(tmp_path / "c1.npz"), transport=None)
+    rt.load()
+    assert rt.preprocessing_id == "per-client"
+    assert not np.allclose(rt.transform.mu, transforms["c0"].mu)

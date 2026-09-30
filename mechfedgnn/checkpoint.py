@@ -37,7 +37,7 @@ import numpy as np
 from mechfedgnn.artifacts import atomic_write_bytes, atomic_write_json
 from mechfedgnn.protocol import state_version
 
-CHECKPOINT_SCHEMA = 1
+CHECKPOINT_SCHEMA = 2
 OPTIMIZER_POLICY = {
     "persisted": False,
     "policy": "reset-per-local-training-call",
@@ -61,6 +61,7 @@ class Checkpoint:
     models: dict                      # client -> parent (open) or aggregated (complete) state
     updates: dict                     # client -> update already received this round
     signatures: dict = field(default_factory=dict)   # client -> aggregate summary, if sent
+    generation: int = 0               # which set of state files this header points at
 
     def header(self) -> dict:
         return {"schema_version": CHECKPOINT_SCHEMA, "experiment_id": self.experiment_id,
@@ -70,28 +71,73 @@ class Checkpoint:
                 "counts": dict(self.counts), "signatures": dict(self.signatures),
                 "model_schema_id": self.model_schema_id,
                 "config_digest": self.config_digest, "seed_streams": dict(self.seed_streams),
-                "optimizer": OPTIMIZER_POLICY,
+                "optimizer": OPTIMIZER_POLICY, "generation": self.generation,
                 "model_versions": {c: state_version(s) for c, s in self.models.items()},
                 "update_versions": {c: state_version(s) for c, s in self.updates.items()}}
 
 
+def _state_path(directory: str, prefix: str, client: str, generation: int) -> str:
+    return os.path.join(directory, f"{prefix}_{client}_g{generation}.npz")
+
+
 def save(directory: str, cp: Checkpoint) -> str:
-    """Atomic: every model file first, then the header last. The header is the
-    commit point - a checkpoint without it is ignored on resume."""
+    """Replace a checkpoint WITHOUT destroying the one already there.
+
+    Per-file atomic writes are not enough: writing the new state over the old
+    file names leaves the existing header pointing at contents that no longer
+    match it, so an interruption between the first state file and the header
+    destroys the previous checkpoint as well as failing to write the new one.
+
+    Instead each save writes a NEW generation of state files, then commits by
+    atomically replacing the header, then deletes the superseded generation.
+    Interrupted before the header: the old header and its own files are intact.
+    Interrupted after: the new checkpoint is complete and the leftovers are
+    removed on the next save.
+    """
     os.makedirs(directory, exist_ok=True)
     import io
+
+    previous = _read_header(directory)
+    cp.generation = int((previous or {}).get("generation", -1)) + 1
 
     def _dump(prefix, mapping):
         for client, state in mapping.items():
             buf = io.BytesIO()
             np.savez(buf, **{k: np.asarray(v) for k, v in state.items()})
-            atomic_write_bytes(os.path.join(directory, f"{prefix}_{client}.npz"), buf.getvalue())
+            atomic_write_bytes(_state_path(directory, prefix, client, cp.generation),
+                               buf.getvalue())
 
     _dump("model", cp.models)
     _dump("update", cp.updates)
     path = os.path.join(directory, "checkpoint.json")
-    atomic_write_json(path, cp.header())
+    atomic_write_json(path, cp.header())          # <- the commit point
+    _purge_except(directory, cp.generation)
     return path
+
+
+def _read_header(directory: str) -> dict | None:
+    path = os.path.join(directory, "checkpoint.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _purge_except(directory: str, keep: int) -> None:
+    """Remove superseded state files. Never touches the committed generation."""
+    for name in os.listdir(directory):
+        if not name.endswith(".npz"):
+            continue
+        stem = name[:-4]
+        gen = stem.rsplit("_g", 1)[-1]
+        if gen.isdigit() and int(gen) != keep:
+            try:
+                os.remove(os.path.join(directory, name))
+            except OSError:
+                pass                              # a leftover is harmless; it is ignored
 
 
 def load(directory: str) -> Checkpoint | None:
@@ -102,10 +148,12 @@ def load(directory: str) -> Checkpoint | None:
         h = json.load(f)
     if h.get("schema_version") != CHECKPOINT_SCHEMA:
         raise ValueError(f"unsupported checkpoint schema {h.get('schema_version')}")
+    generation = int(h.get("generation", 0))
+
     def _read(prefix, names, required):
         out = {}
         for client in names:
-            p = os.path.join(directory, f"{prefix}_{client}.npz")
+            p = _state_path(directory, prefix, client, generation)
             if not os.path.exists(p):
                 if required:
                     raise FileNotFoundError(f"checkpoint is missing {prefix} for {client}")
@@ -129,7 +177,7 @@ def load(directory: str) -> Checkpoint | None:
                       counts=h["counts"], signatures=h.get("signatures") or {},
                       model_schema_id=h["model_schema_id"],
                       config_digest=h["config_digest"], seed_streams=h["seed_streams"],
-                      models=models, updates=updates)
+                      models=models, updates=updates, generation=generation)
 
 
 def from_coordinator(coord, config_digest: str, seed_streams: Mapping[str, Any]) -> Checkpoint:

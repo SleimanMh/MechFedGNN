@@ -77,9 +77,11 @@ def main():
                        shard_path=os.path.join(args.shards, f"{args.client_id}.npz"),
                        transport=transport, learner=MaskAwareMLP(hidden=tuple(meta["hidden"])),
                        local_steps=args.local_steps, seed=1000,
-                       bin_edges=meta["bin_edges"], feature_names=meta["feature_names"])
+                       bin_edges=meta["bin_edges"], feature_names=meta["feature_names"],
+                       shared_scale=meta.get("shared_scale"))
     rt.load()
-    print(f"{args.client_id}: shard loaded, n_train={rt.n_train}", flush=True)
+    print(f"{args.client_id}: shard loaded, n_train={rt.n_train}, "
+          f"preprocessing={rt.preprocessing_id}", flush=True)
 
     for r in range(1, args.rounds + 1):
         if not wait_open(transport, args.client_id, r, args.timeout):

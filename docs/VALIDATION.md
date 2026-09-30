@@ -1,8 +1,9 @@
 # Validation report
 
-**202 tests pass, 1 skipped** (86 pre-existing research tests + 73 from the
-refactor + 44 from the dashboard). Run: `python -m pytest tests -q` — or
-`-m "not slow"` to skip the three tests that spawn real client processes.
+**COUNT_PLACEHOLDER** (86 pre-existing research tests + 73 from the refactor +
+8 regression tests for the defects found in review + 44 from the dashboard).
+Run: `python -m pytest tests -q` - or `-m "not slow"` to skip the three tests
+that spawn real client processes.
 
 The skip is conditional: one dashboard test skips itself when no declared
 fallback happens to fire in the reference run, rather than asserting nothing.
@@ -72,6 +73,16 @@ injection **disabled**; provenance records the dirty flag, checksums, split and
 mask ids, preprocessing and where it was fitted, realised weights, fallbacks and
 participation.
 
+## Defects found in review and fixed
+
+Three framework defects were reported in an external review, reproduced here
+before any change, and fixed with a regression test each.
+
+| Defect | Why it mattered | Fix | Test |
+|---|---|---|---|
+| **Every client fitted its own feature and target scale.** `ClientRuntime.load` always built a `Standardiser` from the client's own training fold, so parameters averaged across clients represented different numerical coordinates. This also did not match the corrected research protocol (§16, `loop.shared_scaler`). | Averaging parameters fitted in different input coordinates is not noisy - it is meaningless. | `ClientRuntime` accepts `shared_scale`; `shared_coordinates()` fits one frozen set (as `loop.shared_scaler` does, off pooled design rows), `y_median` stays per client for AUC exactly as `loop.scaler_for` does. Every update declares a `preprocessing_id`, the coordinator refuses a disagreement, and `require_preprocessing_id` pins it. The demo now uses shared coordinates by default (`--per-client-scaling` opts out, and is then refused by a server that requires sharing). | `test_shared_coordinates_put_every_client_in_the_same_input_space`, `test_clients_declaring_different_preprocessing_coordinates_are_refused`, `test_a_required_preprocessing_identity_is_enforced_on_every_update` |
+| **A second, different update from the same client was accepted in the same round**, silently replacing the first. Only `update_id` was checked, so a different model produced a different id and passed. | One client could choose which of its models was aggregated after watching the round progress. | `Reject.ALREADY_REPORTED` when the client is already in `round.updates`. An identical resend stays `DUPLICATE`, because a retry after an interruption is benign and a different model is not. | `test_a_second_different_update_from_the_same_client_is_refused`, `test_an_identical_resend_is_still_a_duplicate_not_already_reported`, `test_the_round_still_completes_after_a_refused_second_update` |
+| **An interrupted checkpoint replacement destroyed the previous checkpoint.** Per-file atomic writes replaced state under the committed file names, so an interruption before the header was rewritten left the old header pointing at contents that no longer matched it - and `load()` raised. | The recovery mechanism could leave nothing to recover from. | Generation-based replacement: each save writes `*_g<n+1>.npz`, commits by atomically replacing the header, then purges the superseded generation. Checkpoint schema 1 -> 2. | `test_an_interrupted_replacement_leaves_the_previous_checkpoint_loadable`, `test_a_committed_replacement_removes_the_superseded_state_files` |
 ## Dashboard (docs/DASHBOARD.md)
 
 | Requirement | Test | Result |
@@ -101,6 +112,14 @@ participation.
    Fixed by treating "the round has advanced past *r*" as completion.
 3. **Server exited before clients could confirm** the final round. Fixed with a
    linger period.
+4. **A 401 was sent without draining the request body.** On a keep-alive
+   connection the unread body is parsed as the next request, so the client
+   could be reset before reading the refusal - an order-dependent failure of
+   `test_unauthenticated_network_request_is_refused` on Windows, roughly half
+   the time when the security tests ran first, and never when that file ran
+   alone, which is why it read as a flake rather than a bug. The handler now
+   drains before refusing, and closes the connection on an oversized body
+   instead of leaving it unread.
 4. **A 401 was sent without draining the request body** (found while verifying
    the dashboard). On a keep-alive connection the unread body is parsed as the
    next request, so the client could be reset before reading the refusal - an

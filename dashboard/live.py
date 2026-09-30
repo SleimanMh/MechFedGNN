@@ -170,11 +170,20 @@ class Session:
             from mechfedgnn.security import Allowlist, make_dev_certs, server_context
             make_dev_certs(certs, self.clients)
             self.bus.emit("control", "development certificates issued; mutual TLS required")
+            self.bus.emit("control",
+                          f"clients must declare preprocessing={meta.get('preprocessing_id')}; "
+                          f"updates fitted in other coordinates are refused",
+                          preprocessing_id=meta.get("preprocessing_id"))
 
             learner = MaskAwareMLP(hidden=tuple(meta["hidden"]))
             theta0 = learner.initial_state(meta["n_features"], seed=0)
-            coord = ServerCoordinator(experiment_id="demo", clients=meta["clients"],
-                                      schema=meta["schema_id"], round_timeout_s=120.0)
+            coord = ServerCoordinator(
+                experiment_id="demo", clients=meta["clients"], schema=meta["schema_id"],
+                round_timeout_s=120.0,
+                # every client must standardise in the same coordinates, or its
+                # parameters are not comparable with the others' and averaging
+                # them means nothing
+                require_preprocessing_id=meta.get("preprocessing_id"))
             app = ObservedApp(coord, self.bus,
                               allowlist=Allowlist({c: {"demo"} for c in self.clients}))
             self._httpd = serve(app, "127.0.0.1", 0, ssl_context=server_context(certs))

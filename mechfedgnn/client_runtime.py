@@ -5,6 +5,9 @@ to: a model update, its declared sample count, and the aggregate signature the
 selected method needs. Per-example predictions are never sent; raw features,
 labels and per-row masks never leave the client.
 """
+import copy
+import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -29,6 +32,48 @@ def save_client_shard(path: str, X, M, y, folds: Mapping[str, np.ndarray], roles
     return path
 
 
+def preprocessing_id(shared: Mapping[str, Any] | None) -> str:
+    """Identity of the preprocessing COORDINATES every client must share.
+
+    Averaging parameters only means something if the clients' inputs are in the
+    same numerical coordinates. `None` means each client standardises on its own
+    training fold, which is a legitimate protocol (E1 ran that way) but must be
+    declared, because the resulting parameters are NOT in a common space.
+    """
+    if shared is None:
+        return "per-client"
+    blob = json.dumps({"mu": [float(v) for v in shared["mu"]],
+                       "sd": [float(v) for v in shared["sd"]],
+                       "y_mu": float(shared["y_mu"]), "y_sd": float(shared["y_sd"])},
+                      sort_keys=True)
+    return "shared:" + hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def shared_coordinates(X, M, y) -> dict:
+    """Fit ONE set of standardisation coordinates, to be handed to every client.
+
+    Mirrors `loop.shared_scaler` (the §16 correction): fitted once, off the
+    design rows, and frozen. Returned as plain JSON so it can be distributed.
+    """
+    st = Standardiser(np.asarray(X, float), np.asarray(M, np.int8), np.asarray(y, float))
+    return {"mu": st.mu.tolist(), "sd": st.sd.tolist(),
+            "y_mu": float(st.y_mu), "y_sd": float(st.y_sd)}
+
+
+def _standardiser_from(shared: Mapping[str, Any], y_train) -> Standardiser:
+    """Shared feature/target coordinates, the client's own AUC median.
+
+    Mirrors `loop.scaler_for`: the coordinates are shared so parameters are
+    comparable; `y_median` only binarises for AUC and stays per client.
+    """
+    st = Standardiser.__new__(Standardiser)
+    st.mu = np.asarray(shared["mu"], float)
+    st.sd = np.asarray(shared["sd"], float)
+    st.y_mu, st.y_sd = float(shared["y_mu"]), float(shared["y_sd"])
+    st.y_median = float(np.median(y_train))
+    return st
+
+
 @dataclass
 class ClientRuntime:
     client_id: str
@@ -40,6 +85,7 @@ class ClientRuntime:
     seed: int = 0
     bin_edges: Mapping[str, Any] = field(default_factory=dict)
     feature_names: list = field(default_factory=list)
+    shared_scale: Mapping[str, Any] | None = None
     _data: dict = field(default_factory=dict, init=False)
 
     def load(self) -> dict:
@@ -51,8 +97,19 @@ class ClientRuntime:
             raise PermissionError(f"shard belongs to {stored}, not {self.client_id}")
         d = self._data
         tr = d["train"]
-        self.transform = Standardiser(d["X"][tr], d["M"][tr], d["y"][tr])
+        # Shared coordinates when the experiment supplies them; otherwise the
+        # client's own training fold. The choice travels with every update as
+        # `preprocessing_id`, and the coordinator refuses to average across a
+        # disagreement - parameters fitted in different coordinates are not
+        # comparable, so averaging them is meaningless rather than merely noisy.
+        self.transform = (_standardiser_from(self.shared_scale, d["y"][tr])
+                          if self.shared_scale is not None
+                          else Standardiser(d["X"][tr], d["M"][tr], d["y"][tr]))
         return d
+
+    @property
+    def preprocessing_id(self) -> str:
+        return preprocessing_id(self.shared_scale)
 
     @property
     def n_train(self) -> int:
@@ -106,7 +163,7 @@ class ClientRuntime:
         that does not use scores must not transmit more than it needs; what it
         attaches is exactly `MaskSignatureProvider.aggregate_only`, so per-row
         masks, features and labels still cannot leave."""
-        meta = {"n_train": self.n_train}
+        meta = {"n_train": self.n_train, "preprocessing_id": self.preprocessing_id}
         if send_signature:
             meta["signature"] = self._json_safe(self.aggregate_signature())
         env = Envelope(experiment_id=self.experiment_id, client_id=self.client_id,
