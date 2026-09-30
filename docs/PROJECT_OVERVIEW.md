@@ -165,7 +165,7 @@ Four problems and their fixes:
 | `receiver_fraction` made receivers systematically different from donors | removed | it confounded "receiver vs donor" with "different missingness" |
 | Design split was a fraction, so small datasets lost too much | flat 10 %, 150-row floor | protein and kin8nm were donating far more rows than concrete |
 | Headroom checked with a fixed budget | early stopping on the same validation rule | a "pooling helps" verdict that is really "pooled got more steps" is worthless |
-| Local learning curve normalised across datasets per step | normalise each dataset by its own minimum across steps | **this was a real bug**: it tracked the wine/concrete scale ratio and chose 10 local steps. Fixed, the answer is 200 |
+| Local learning curve normalised across datasets at each step | normalise each dataset by its own minimum across steps | **this was a real bug**: it tracked the wine/concrete scale ratio rather than either dataset's learning curve, and chose 10 local steps. Fixed, the selection is sane — E1 runs at 300, and E5's own Stage B budget selection later chose 200 |
 
 **Dataset preconditions, applied before seeing any result.** Rejected: *naval*
 (maskable features had median |corr| 0.995 — masking them removes nothing),
