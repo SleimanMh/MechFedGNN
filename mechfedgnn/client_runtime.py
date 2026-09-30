@@ -157,13 +157,17 @@ class ClientRuntime:
                                   seed=self.seed + round_id)
 
     def submit(self, round_id: int, state: Mapping[str, np.ndarray], parent_version: str,
-               schema: str, send_signature: bool = False) -> tuple[int, Any]:
+               schema: str, send_signature: bool = False,
+               evaluation: Mapping[str, Any] | None = None) -> tuple[int, Any]:
         """`send_signature` attaches the AGGREGATE mask summary, which is what a
         score-based method needs on the server. It is opt-in because a method
         that does not use scores must not transmit more than it needs; what it
         attaches is exactly `MaskSignatureProvider.aggregate_only`, so per-row
         masks, features and labels still cannot leave."""
         meta = {"n_train": self.n_train, "preprocessing_id": self.preprocessing_id}
+        if evaluation is not None:
+            # counts and summed squared error only - never labels or predictions
+            meta["evaluation"] = self._json_safe(evaluation)
         if send_signature:
             meta["signature"] = self._json_safe(self.aggregate_signature())
         env = Envelope(experiment_id=self.experiment_id, client_id=self.client_id,
@@ -173,7 +177,33 @@ class ClientRuntime:
                        meta=meta)
         return self.transport.call("/v1/update", env, state)
 
-    def run_round(self, round_id: int, schema: str, send_signature: bool = False) -> tuple[int, Any]:
+    def evaluate(self, state: Mapping[str, np.ndarray], fold: str = "val") -> dict:
+        """AGGREGATE error on one of this client's own folds.
+
+        Returns the evaluated-record count and the summed squared error, in the
+        target's original units - the same quantities `model.metrics` reduces to
+        RMSE = sqrt(sse / n). Per-example predictions and labels are not part of
+        the result and never leave the client.
+        """
+        d = self._data
+        idx = d[fold]
+        if len(idx) == 0:
+            return {"fold": fold, "n": 0, "sse": 0.0}
+        xin = self.transform.inputs(d["X"][idx], d["M"][idx])
+        pred = self.learner.predict(state, d["X"].shape[1], xin, self.transform)
+        err = np.asarray(pred, float) - d["y"][idx]
+        return {"fold": fold, "n": int(len(idx)), "sse": float((err ** 2).sum())}
+
+    def run_round(self, round_id: int, schema: str, send_signature: bool = False,
+                  evaluate_fold: str | None = None) -> tuple[int, Any]:
+        """One round. With `evaluate_fold`, the client also reports AGGREGATE
+        error for the model it was given and for the model it trained, so the
+        server can show RMSE without ever seeing a label or a prediction."""
         parent, version = self.fetch_parent(round_id)
+        evaluation = None
+        if evaluate_fold:
+            received = self.evaluate(parent, evaluate_fold)
         new_state = self.local_update(parent, round_id)
-        return self.submit(round_id, new_state, version, schema, send_signature)
+        if evaluate_fold:
+            evaluation = {"received": received, "local": self.evaluate(new_state, evaluate_fold)}
+        return self.submit(round_id, new_state, version, schema, send_signature, evaluation)

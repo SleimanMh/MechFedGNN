@@ -204,6 +204,7 @@ async function openClient(id) {
   addKV(dl, "Missingness group", String(c.group));
   b.appendChild(dl);
 
+  if (c.seed_caveat) b.appendChild(banner(c.seed_caveat, "callout warn"));
   b.appendChild(banner(
     "What this client sends: aggregate mask summaries (per-feature missing rates, joint-absence " +
     "and joint-observation counts, the association matrix), coarse histograms, and its model " +
@@ -261,6 +262,11 @@ async function renderAggregation() {
         "weighting function the experiment used rather than approximating it."
       : "");
 
+  const caveat = d.seed_caveat
+    ? `<div class="callout warn"><b>These weights may not be this seed's.</b> ${d.seed_caveat}</div>`
+    : `<p class="note">${d.seed_note || ""}</p>`;
+  $("ag-seed-caveat").innerHTML = caveat;
+
   $("ag-fallback").innerHTML = d.fallback
     ? `<div class="callout warn"><b>Declared fallback active (${d.fallback}).</b> ` +
       `${d.fallback_explained} This is the pre-declared rule, not an error.</div>` : "";
@@ -268,7 +274,7 @@ async function renderAggregation() {
   const ol = $("ag-steps"); ol.innerHTML = "";
   d.steps.forEach((s) => {
     const li = el("li");
-    if (!d.uses_score && s.n === 1) li.className = "inactive";
+    if (s.inactive) li.className = "inactive";
     li.appendChild(el("div", "t", s.title));
     li.appendChild(el("div", "d", s.detail));
     const vals = Object.entries(s.values || {});
@@ -276,6 +282,14 @@ async function renderAggregation() {
       li.appendChild(el("div", "v",
         vals.map(([k, v]) => `${k} = ${v == null ? "undefined" : fmt(v, 5)}`).join("   ")));
     }
+    // secondary quantities the step mentions but does not compute, e.g. p_j
+    Object.entries(s.also || {}).forEach(([label, m]) => {
+      const row = el("div", "v");
+      row.style.opacity = ".7";
+      row.textContent = `${label}:  ` + Object.entries(m)
+        .map(([k, v]) => `${k} = ${fmt(v, 5)}`).join("   ");
+      li.appendChild(row);
+    });
     ol.appendChild(li);
   });
 
@@ -373,7 +387,8 @@ async function renderWeights() {
     t.appendChild(tb);
     $("w-matrix-note").textContent = m.note +
       (Object.keys(m.fallbacks).length
-        ? ` Rows marked (fallback) used the declared sample-size fallback.` : "");
+        ? ` Rows marked (fallback) used the declared sample-size fallback.` : "") +
+      (m.seed_caveat ? `  NOTE: ${m.seed_caveat}` : "");
   } catch (e) {
     t.innerHTML = ""; $("w-matrix-note").textContent = e.message;
   }

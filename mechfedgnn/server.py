@@ -63,6 +63,7 @@ class RoundState:
     counts: dict[str, int] = field(default_factory=dict)       # client -> declared n
     signatures: dict[str, dict] = field(default_factory=dict)  # client -> AGGREGATE summary
     preprocessing: dict[str, str] = field(default_factory=dict)  # client -> declared coordinates
+    evaluations: dict[str, dict] = field(default_factory=dict)   # client -> {n, sse} per model
     accepted_ids: set[str] = field(default_factory=set)
     closed: bool = False
     opened_at: float = field(default_factory=time.monotonic)
@@ -155,6 +156,11 @@ class ServerCoordinator:
         r.accepted_ids.add(env.update_id)
         r.updates[env.client_id] = dict(state)
         r.counts[env.client_id] = n
+        ev = env.meta.get("evaluation")
+        if isinstance(ev, dict):
+            # aggregate error only: evaluated-record counts and summed squared
+            # error. The server still holds no labels and no predictions.
+            r.evaluations[env.client_id] = ev
         sig = env.meta.get("signature")
         if isinstance(sig, dict):
             # aggregate mask statistics only; a score-based method needs them on

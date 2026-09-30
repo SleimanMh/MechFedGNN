@@ -88,8 +88,11 @@ def load_run(path: str) -> dict:
             "maskable": [feats[i] for i in maskable] if feats else maskable,
             "always_observed": [feats[i] for i in (roles.get("always_observed") or [])] if feats else [],
         })
+    # report.write_run writes params from outs[0]: the FIRST seed only.
+    params_seed = int(metrics.seed.min()) if metrics is not None and len(metrics) else None
     return {
         "path": path, "run_id": os.path.basename(path),
+        "params_seed": params_seed,
         "experiment": os.path.basename(os.path.dirname(path)),
         "dataset": cfg.get("dataset"), "config": cfg,
         "method": {"arms": cfg.get("arms") or ARMS_ORDER,
@@ -123,6 +126,12 @@ def availability(path, metrics, scores, saved_weights, compute) -> dict:
                                         "per-step loss was not saved"},
         "val_test_row_counts": {"available": False,
                                 "note": "only n_train per client was saved"},
+        "per_seed_client_sizes": {"available": False,
+                                  "note": "client training-fold sizes were saved for the FIRST "
+                                          "seed only (report.write_run writes params from "
+                                          "outs[0]). Scores and metrics ARE per seed. The "
+                                          "aggregation inspector says, per arm, whether the "
+                                          "weights it shows depend on those sizes"},
         "federated_rounds": {"available": False,
                              "note": "a research run is a single aggregation; `budget` is "
                                      "adaptation steps, not federated rounds"},
@@ -132,9 +141,32 @@ def availability(path, metrics, scores, saved_weights, compute) -> dict:
 
 
 def _sample_shares(run: dict) -> tuple[list[str], np.ndarray]:
+    """p_j from the saved client params.
+
+    `report.write_run` writes `params/<client>.json` from `outs[0]` - the FIRST
+    seed only - and no per-seed client size was saved anywhere else
+    (`compute.csv`'s `examples` is steps x batch size, not the training-fold
+    size). So these shares describe the first seed. `size_dependent()` says when
+    that actually changes a number the dashboard displays.
+    """
     ids = [c["id"] for c in run["clients"]]
     n = np.array([c["n_train"] or 0 for c in run["clients"]], float)
     return ids, (n / n.sum() if n.sum() else np.full(len(n), 1.0 / max(len(n), 1)))
+
+
+def size_dependent(arm: str, ac: dict, fallback: str) -> bool:
+    """Does this arm's weighting actually use the client sizes p?
+
+    `local-only` and `uniform-donor` never do. A score arm with alpha = 1 and no
+    fallback does not either - its weights come entirely from the per-seed
+    scores in `scores.csv`, so they are exact for the selected seed. `fedavg`,
+    any alpha < 1, and any fallback do use p.
+    """
+    if arm in ("local-only", "uniform-donor"):
+        return False
+    if arm == "fedavg" or fallback:
+        return True
+    return float(ac.get("alpha", 1.0)) != 1.0
 
 
 def score_table(run: dict, seed: int, receiver: str) -> dict:
@@ -209,7 +241,42 @@ def aggregation_breakdown(run: dict, seed: int, receiver: str, arm: str) -> dict
         "total_ok": abs(total - 1.0) < 1e-9,
         "weights_source": "saved artifact" if saved else "recomputed via loop.arm_weights",
         "steps": _steps(arm, score_key, rows, p, i, ac, gamma, fallback),
+        "effective_alpha": _effective(arm, ac, fallback)[0],
+        "effective_beta": _effective(arm, ac, fallback)[1],
+        **_seed_provenance(run, seed, arm, ac, fallback, bool(saved)),
     }
+
+
+def _seed_provenance(run, seed, arm, ac, fallback, has_saved) -> dict:
+    """Whether the displayed weights really belong to the SELECTED seed.
+
+    Client sizes were saved for the first seed only. Scores were saved per seed.
+    So a score arm with alpha = 1 and no fallback is exact for any seed, while
+    anything that uses p is exact only for the first seed - unless realised
+    weights were saved, in which case they are read rather than recomputed.
+    """
+    params_seed = run.get("params_seed")
+    uses_p = size_dependent(arm, ac, fallback)
+    same_seed = (params_seed is None) or (seed == params_seed)
+    exact = has_saved or not uses_p or same_seed
+    if has_saved:
+        why = "realised weights were saved for this run, so they are read, not recomputed"
+    elif not uses_p:
+        why = (f"`{arm}` does not use client sizes here (alpha = 1, no fallback), so these "
+               f"weights come entirely from this seed's saved scores and are exact")
+    elif same_seed:
+        why = "client sizes were saved for this seed, so these weights are exact"
+    else:
+        why = (f"`{arm}` weights depend on client training-fold sizes, and only seed "
+               f"{params_seed}'s sizes were saved. If the clients were sized differently in "
+               f"seed {seed}, these weights differ from the ones the experiment used. The "
+               f"RMSE values reported on the Results tab are unaffected - they were saved "
+               f"per seed.")
+    return {"client_sizes_from_seed": params_seed,
+            "weights_use_client_sizes": uses_p,
+            "weights_exact_for_this_seed": exact,
+            "seed_caveat": None if exact else why,
+            "seed_note": why}
 
 
 def _saved_weight_lookup(run, seed, receiver, arm) -> dict:
@@ -231,40 +298,121 @@ def _explain_fallback(reason: str) -> str | None:
     }.get(reason, reason)
 
 
+def _effective(arm, ac, fallback) -> tuple[float, float]:
+    """The alpha and beta `loop.arm_weights` ACTUALLY uses for this arm.
+
+    Not always the configured ones: `fedavg` pins alpha = 0, beta = 1 by
+    definition, and the declared fallback re-runs the weighting with alpha = 0,
+    beta = 1. Showing the configured values there would misdescribe the
+    calculation that ran.
+    """
+    if arm == "fedavg" or fallback:
+        return 0.0, 1.0
+    return float(ac.get("alpha", 1.0)), float(ac.get("beta", 1.0))
+
+
 def _steps(arm, score_key, rows, p, i, ac, gamma, fallback) -> list[dict]:
-    """The calculation narrated with this round's actual numbers."""
-    alpha, beta = ac.get("alpha"), ac.get("beta")
+    """The calculation narrated with this round's actual intermediate numbers.
+
+    Every displayed value is the quantity its own formula names. This step
+    previously showed p_j under the label `alpha*q_j + (1-alpha)*p_j`, which is
+    only the same number when alpha = 0.
+    """
+    alpha, beta = _effective(arm, ac, fallback)
+    conf_a, conf_b = ac.get("alpha"), ac.get("beta")
+    n_donors = len(rows)
+
+    def base_of(r):
+        """base_j exactly as kernel.donor_weights computes it: an undefined
+        score falls back to p_j for that donor, whatever alpha is."""
+        q = r["score"]
+        if arm in ("fedavg", "uniform-donor") or fallback or q is None:
+            return r["sample_share"]
+        return alpha * q + (1.0 - alpha) * r["sample_share"]
+
+    if arm == "local-only":
+        return [{"n": 1, "title": "No aggregation", "inactive": True,
+                 "detail": "`local-only` keeps the receiver's own model (gamma = 1) and mixes "
+                           "nothing in. It is the baseline the other arms are judged against.",
+                 "values": {}}]
+
     steps = []
-    if score_key:
-        steps.append({"n": 1, "title": "Receiver-to-donor score",
-                      "detail": f"score `{score_key}` for each donor, computed from the "
-                                f"receiver's and the donor's mask summaries",
-                      "values": {r["donor"]: r["score"] for r in rows}})
-    else:
-        steps.append({"n": 1, "title": "No score used",
-                      "detail": f"`{arm}` does not use a receiver-to-donor score",
+    if arm == "uniform-donor":
+        steps.append({"n": 1, "title": "No receiver-to-donor score", "inactive": True,
+                      "detail": "`uniform-donor` deliberately uses no score: every donor counts "
+                                "the same. It is the reference the scored methods must beat.",
                       "values": {}})
-    steps.append({"n": 2, "title": "Blend with sample-size weighting (alpha)",
-                  "detail": f"base_j = alpha*q_j + (1-alpha)*p_j, with alpha = {alpha}"
-                            + (" - alpha = 1, so the score is used alone" if alpha == 1 else "")
-                            + (f"; FALLBACK ACTIVE ({fallback}): alpha is forced to 0, so base_j = p_j"
-                               if fallback else ""),
-                  "values": {r["donor"]: r["sample_share"] for r in rows}})
-    steps.append({"n": 3, "title": "Sharpening (beta)",
-                  "detail": f"base_j^beta with beta = {beta}"
-                            + (" - beta = 1, so weights are not sharpened" if beta == 1 else ""),
-                  "values": {}})
-    steps.append({"n": 4, "title": "Normalise across participating donors",
-                  "detail": "w_j = base_j^beta / sum over donors; the receiver itself gets 0",
-                  "values": {r["donor"]: r["donor_weight"] for r in rows}})
+        steps.append({"n": 2, "title": "No blend with sample size", "inactive": True,
+                      "detail": "sample size is not used either - the weights do not depend on "
+                                "how much data a donor holds.", "values": {}})
+        steps.append({"n": 3, "title": "No sharpening", "inactive": True,
+                      "detail": "there is nothing to sharpen.", "values": {}})
+        steps.append({"n": 4, "title": "Equal donor weights",
+                      "detail": f"w_j = 1/{n_donors} for each of the {n_donors} donors; "
+                                f"the receiver itself gets 0",
+                      "values": {r["donor"]: r["donor_weight"] for r in rows}})
+    else:
+        if score_key:
+            steps.append({"n": 1, "title": "Receiver-to-donor score",
+                          "inactive": bool(fallback),
+                          "detail": f"score `{score_key}` for each donor, from the receiver's "
+                                    f"and the donor's aggregate mask summaries"
+                                    + (f" - NOT USED this round: the declared fallback fired "
+                                       f"({fallback})" if fallback else ""),
+                          "values": {r["donor"]: r["score"] for r in rows}})
+        else:
+            steps.append({"n": 1, "title": "No receiver-to-donor score", "inactive": True,
+                          "detail": f"`{arm}` weights donors by their declared sample size "
+                                    f"alone; no score is computed", "values": {}})
+
+        if alpha == 0.0:
+            detail = ("base_j = p_j, the donor's share of all clients' training rows. "
+                      + ("`fedavg` pins alpha = 0 by definition"
+                         if arm == "fedavg" else
+                         f"the declared fallback ({fallback}) re-runs the weighting with "
+                         f"alpha = 0, so the score is not used")
+                      + (f"; the configured alpha ({conf_a}) does not apply here"
+                         if conf_a not in (None, 0.0) else ""))
+        elif alpha == 1.0:
+            detail = ("base_j = alpha*q_j + (1-alpha)*p_j with alpha = 1, so base_j = q_j: "
+                      "the score is used on its own and sample size does not enter")
+        else:
+            detail = (f"base_j = alpha*q_j + (1-alpha)*p_j with alpha = {alpha}: "
+                      f"part score, part sample share")
+        bases = {r["donor"]: base_of(r) for r in rows}
+        steps.append({"n": 2, "title": "Blend the score with sample-size weighting (alpha)",
+                      "detail": detail, "values": dict(bases),
+                      "also": {"p_j (sample share)":
+                               {r["donor"]: r["sample_share"] for r in rows}}})
+
+        steps.append({"n": 3, "title": "Sharpening (beta)", "inactive": beta == 1.0,
+                      "detail": (f"base_j^beta with beta = {beta}"
+                                 + (" - beta = 1, so the values are unchanged" if beta == 1.0
+                                    else "; a larger beta widens the gap between donors")
+                                 + (f"; the configured beta ({conf_b}) does not apply here"
+                                    if arm == "fedavg" and conf_b not in (None, 1.0) else "")),
+                      "values": {k: v ** beta for k, v in bases.items()}})
+
+        total = sum(v ** beta for v in bases.values())
+        steps.append({"n": 4, "title": "Normalise across participating donors",
+                      "detail": f"w_j = base_j^beta / {total:.6g} (the sum over donors); the "
+                                f"receiver itself gets 0, so w sums to 1 over the donors",
+                      "values": {r["donor"]: r["donor_weight"] for r in rows}})
+
     steps.append({"n": 5, "title": "Retain the receiver's self-weight (gamma)",
-                  "detail": f"gamma = {gamma}: the fraction of the receiver's OWN model kept",
+                  "detail": f"gamma = {float(gamma):.6g}: the fraction of its OWN model the "
+                            f"receiver keeps"
+                            + (" - for `fedavg` this is the receiver's own sample share p_i, "
+                               "by definition, not the configured gamma"
+                               if arm == "fedavg" else ""),
                   "values": {"gamma": float(gamma)}})
     steps.append({"n": 6, "title": "Effective donor contribution",
-                  "detail": "(1 - gamma) * w_j; these sum to 1 - gamma, not to 1",
+                  "detail": f"(1 - gamma) * w_j = {1 - float(gamma):.6g} * w_j; "
+                            f"these sum to 1 - gamma, not to 1",
                   "values": {r["donor"]: r["effective_contribution"] for r in rows}})
     steps.append({"n": 7, "title": "Aggregate the parameters",
-                  "detail": "theta_new = gamma*theta_receiver + (1-gamma)*sum_j w_j*theta_j",
+                  "detail": "theta_new = gamma*theta_receiver + (1-gamma)*sum_j w_j*theta_j, "
+                            "applied to every parameter tensor",
                   "values": {}})
     return steps
 
@@ -272,16 +420,21 @@ def _steps(arm, score_key, rows, p, i, ac, gamma, fallback) -> list[dict]:
 def weight_matrix(run: dict, seed: int, arm: str) -> dict:
     """Rows = receivers, columns = contributors. The diagonal is the self-weight."""
     ids, _ = _sample_shares(run)
-    matrix, fallbacks = [], {}
+    matrix, fallbacks, breakdowns = [], {}, []
     for rec in ids:
         b = aggregation_breakdown(run, seed, rec, arm)
+        breakdowns.append(b)
         row = {d["donor"]: d["effective_contribution"] for d in b["donors"]}
         row[rec] = b["receiver_contribution"]
         matrix.append([row.get(c) for c in ids])
         if b["fallback"]:
             fallbacks[rec] = b["fallback"]
+    exact = all(b.get("weights_exact_for_this_seed", True) for b in breakdowns)
     return {"clients": ids, "matrix": matrix, "arm": arm, "seed": seed,
             "fallbacks": fallbacks,
+            "weights_exact_for_this_seed": exact,
+            "seed_caveat": None if exact else next(
+                (b["seed_caveat"] for b in breakdowns if b.get("seed_caveat")), None),
             "note": "cells are EFFECTIVE contributions: the diagonal is gamma and each row sums to 1"}
 
 

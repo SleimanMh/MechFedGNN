@@ -43,7 +43,46 @@ LIVE_ARMS = ["fedavg", "uniform-donor", "coverage-W_H", "coverage-marginal",
              "population-S", "combined-Q", "combined-Q-marginal", "marginal-rate",
              "missingness-similarity", "coverage-W_C"]
 DEFAULTS = {"clients": 3, "rounds": 2, "local_steps": 25, "seed": 7, "arm": "combined-Q",
-            "gamma": 0.5, "alpha": 1.0, "beta": 1.0, "lambda_pop": 0.5}
+            "gamma": 0.5, "alpha": 1.0, "beta": 1.0, "lambda_pop": 0.5,
+            "evaluate_fold": "val"}
+EVAL_FOLDS = ("val", "test")
+
+
+def _rmse(e) -> float:
+    """RMSE from the aggregate quantities a client reports: sqrt(sse / n)."""
+    n = int(e.get("n") or 0)
+    return float("nan") if n <= 0 else float(np.sqrt(float(e["sse"]) / n))
+
+
+def rmse_table(evaluations) -> list:
+    """Per-client RMSE, plus a micro-average over all evaluated records.
+
+    Derived from evaluated-record counts and summed squared error only; the
+    server never held a label or a per-example prediction. The micro-average
+    pools records, which is legitimate here only because every client
+    standardises in the same coordinates and the target is in original units.
+    """
+    rows = []
+    for rnd in sorted(evaluations, key=int):
+        per_client = evaluations[rnd]
+        totals = {"received": [0, 0.0], "local": [0, 0.0]}
+        for cid in sorted(per_client):
+            ev = per_client[cid]
+            row = {"round": int(rnd), "client": cid, "fold": ev["received"]["fold"]}
+            for model in ("received", "local"):
+                row[model + "_n"] = ev[model]["n"]
+                row[model + "_sse"] = ev[model]["sse"]
+                row[model + "_rmse"] = _rmse(ev[model])
+                totals[model][0] += ev[model]["n"]
+                totals[model][1] += ev[model]["sse"]
+            rows.append(row)
+        micro = {"round": int(rnd), "client": "ALL (micro-average)", "fold": "own folds pooled"}
+        for model in ("received", "local"):
+            n, sse = totals[model]
+            micro[model + "_n"], micro[model + "_sse"] = n, sse
+            micro[model + "_rmse"] = _rmse({"n": n, "sse": sse})
+        rows.append(micro)
+    return rows
 
 
 class EventBus:
@@ -77,13 +116,38 @@ class ObservedApp(ServerApp):
         self.bus = bus
 
     def handle(self, route, blob, authenticated_id):
+        """Emit exactly what was observed, and no more.
+
+        The four stages of getting an aggregated model to a client are distinct,
+        and only some of them are visible from the server:
+
+          1. `computed`  - the server aggregated a model. Observed, but it says
+                           nothing about the client.
+          2. `requested` - the client asked for it. Observed.
+          3. `delivered` - the server wrote the response. Observed.
+          4. receipt     - the client has it. NOT observed: nothing in this
+                           protocol acknowledges a parent fetch, so the
+                           dashboard never claims it.
+
+        A failed request is not a delivery, and a status poll is neither.
+        """
         status, body = super().handle(route, blob, authenticated_id)
         if route == "/v1/status":
             return status, body                      # polling; not a transfer
         if route == "/v1/parent":
-            self.bus.emit("transfer", f"server -> {authenticated_id}: parent model sent",
-                          direction="out", client=authenticated_id, payload="parent_model",
-                          status=status)
+            if status == 200:
+                self.bus.emit("delivered",
+                              f"{authenticated_id} requested its model; server sent the response "
+                              f"(HTTP 200). Receipt by the client is not acknowledged by this "
+                              f"protocol and is not claimed here.",
+                              direction="out", client=authenticated_id, payload="parent_model",
+                              status=status, observed="request_and_response")
+            else:
+                self.bus.emit("reject",
+                              f"{authenticated_id} requested its model; server refused "
+                              f"(HTTP {status}) - no model was sent",
+                              direction="out", client=authenticated_id, payload="parent_model",
+                              status=status)
         elif route == "/v1/update":
             ok = status == 200
             self.bus.emit("transfer" if ok else "reject",
@@ -113,6 +177,7 @@ class Session:
     rounds_done: int = 0
     records: list = field(default_factory=list)       # real close_round output
     scores_seen: dict = field(default_factory=dict)   # round -> receiver -> donor -> score
+    evaluations: dict = field(default_factory=dict)   # round -> client -> per-model {n, sse}
     signature_clients: list = field(default_factory=list)
     _procs: list = field(default_factory=list)
     _httpd: object = None
@@ -128,6 +193,7 @@ class Session:
         self.bus.clear()
         self.state, self.error = "preparing", ""
         self.records, self.scores_seen, self.rounds_done = [], {}, 0
+        self.evaluations = {}
         self.signature_clients = []
         self._procs = []
         self._stop = False
@@ -197,7 +263,10 @@ class Session:
                 argv = [sys.executable, "-m", "demo.client", "--client-id", cid,
                         "--url", self.url, "--shards", shards,
                         "--rounds", str(self.cfg["rounds"]),
-                        "--local-steps", str(self.cfg["local_steps"]), "--tls", certs]
+                        "--local-steps", str(self.cfg["local_steps"]), "--tls", certs,
+                        # the client evaluates on its OWN held-out fold and reports
+                        # only the record count and the summed squared error
+                        "--evaluate-fold", self.cfg["evaluate_fold"]]
                 if needs_sig:
                     argv.append("--send-signature")
                 self._procs.append(subprocess.Popen(
@@ -222,18 +291,41 @@ class Session:
                     time.sleep(0.05)
                 if needs_sig:
                     self.signature_clients = sorted(coord.round.signatures)
+                if coord.round.evaluations:
+                    self.evaluations[r] = dict(coord.round.evaluations)
+                    for cid, ev in sorted(coord.round.evaluations.items()):
+                        self.bus.emit("evaluation",
+                                      f"{cid} reported aggregate error on its own "
+                                      f"{ev['received']['fold']} fold: received model RMSE "
+                                      f"{_rmse(ev['received']):.4f}, locally trained model RMSE "
+                                      f"{_rmse(ev['local']):.4f} over {ev['local']['n']} records "
+                                      f"(counts and summed squared error only - no labels, no "
+                                      f"per-example predictions)",
+                                      client=cid, round=r)
                 assignments, record = coord.close_round(self._weights_for(coord, arm, r))
                 self.records.append(record)
                 self.rounds_done = r
                 for x in record:
-                    self.bus.emit("aggregate",
-                                  f"server -> {x['receiver']}: personalised model "
-                                  f"(gamma {x['gamma']:.4f})",
-                                  direction="out", client=x["receiver"], round=r,
+                    # COMPUTED, not delivered: the server has produced this
+                    # client's personalised model. Whether the client ever
+                    # fetches it is a separate, separately observed event.
+                    self.bus.emit("computed",
+                                  f"server computed the personalised model for {x['receiver']} "
+                                  f"(gamma {x['gamma']:.4f}); it is delivered only if the client "
+                                  f"requests it",
+                                  client=x["receiver"], round=r,
                                   weights=x["weights"], gamma=x["gamma"])
                 self.bus.emit("round", f"round {r} closed", round=r)
             self.state = "finished" if not self._stop else "idle"
             self.bus.emit("control", f"run {self.state}")
+            if not self._stop:
+                # Worth stating plainly rather than letting the picture imply it:
+                # the demo clients stop after confirming the last round closed,
+                # so the final round's models are computed and never fetched.
+                self.bus.emit("note",
+                              f"the round {self.cfg['rounds']} models were computed but never "
+                              f"requested: the demo clients exit once the final round closes, so "
+                              f"no delivery is observed for them")
         except Exception as e:                                     # noqa: BLE001
             self.state = "failed"
             self.error = f"{type(e).__name__}: {e}"
@@ -322,6 +414,10 @@ def validate(cfg: dict) -> dict:
             if not lo <= v <= hi:
                 raise ValueError(f"'{k}' must be between {lo} and {hi}")
             out[k] = v
+    if "evaluate_fold" in cfg:
+        if cfg["evaluate_fold"] not in EVAL_FOLDS:
+            raise ValueError("'evaluate_fold' must be one of " + str(EVAL_FOLDS))
+        out["evaluate_fold"] = cfg["evaluate_fold"]
     if "arm" in cfg:
         if cfg["arm"] not in LIVE_ARMS:
             raise ValueError(f"'{cfg['arm']}' is not one of the permitted methods")
@@ -347,12 +443,22 @@ def routes(api, allow_launch=False):
         s["launch_enabled"] = allow_launch
         s["scores_seen"] = session.scores_seen
         s["signature_clients"] = session.signature_clients
+        s["rmse"] = rmse_table(session.evaluations)
+        s["rmse_note"] = (
+            "Each client evaluates on its OWN held-out fold and reports two numbers per model: "
+            "the evaluated-record count and the summed squared error. RMSE = sqrt(sse / n) is "
+            "computed from those, so no label and no per-example prediction is transmitted. "
+            "'received' is the model the client was given at the start of the round - at round 1 "
+            "that is the untrained starting model, so its error is expected to be large. This is "
+            "one run of a demonstration, not evidence about which method is better.")
         s["unavailable"] = {
-            "per_step_training_loss": "clients report a model update, not a loss curve",
-            "client_row_counts_beyond_n_train": "only the declared sample count is transmitted",
-            "server_side_evaluation": "the server holds no data, so it cannot evaluate; "
-                                      "RMSE for a live run would have to come from the clients "
-                                      "and is not collected in this demonstration",
+            "per_step_training_loss": "clients report a model update and aggregate error, "
+                                      "not a loss curve",
+            "client_row_counts_beyond_n_train": "only the declared sample count and the "
+                                                "evaluated-record count are transmitted",
+            "client_confirmed_receipt": "no message in this protocol acknowledges a parent "
+                                        "fetch, so 'the client has the model' is never claimed; "
+                                        "only 'requested' and 'response sent' are observed",
         }
         return s
 

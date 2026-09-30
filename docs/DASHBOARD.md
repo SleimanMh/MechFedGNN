@@ -102,8 +102,9 @@ These are surfaced in the UI as `unavailable` rather than approximated.
 | **Training loss curves** | `compute.csv` has steps, examples and seconds — not per-step loss |
 | **Validation/test row counts** | only `n_train` per client was saved |
 | **Multiple federated rounds in a research run** | a research run is a single aggregation; `budget` values are *local adaptation* steps, not rounds. Multi-round data exists only on the live path |
-| **Server-side evaluation of a live run** | the server holds no data, so it cannot evaluate. A live run shows mechanism, never accuracy |
-| **Per-step loss on the live path** | clients report a model update, not a loss curve |
+| **Per-step loss on the live path** | clients report a model update and aggregate error, not a loss curve |
+| **Confirmed receipt of a delivered model** | no message in this protocol acknowledges a parent fetch, so "the client has it" is never claimed - only "requested" and "response sent" are observed |
+| **Per-seed client sizes** | saved for the first seed only; the inspector flags the arms where that actually changes a weight |
 
 ---
 
@@ -176,6 +177,86 @@ required; without it `live/start` returns 403.
 | A real launched run completes over mutual TLS with separate processes | `test_a_real_launched_run_completes_over_mutual_tls_with_separate_processes` (slow) |
 
 Query strings can name clients, so the request log prints the path only.
+
+---
+
+## 8b. Defects found in review and fixed
+
+Four dashboard defects were reported, reproduced, then fixed with a regression
+test each (`tests/test_dashboard_review_fixes.py`).
+
+**1. The aggregation explanation showed the wrong intermediate numbers.**
+Step 2 was labelled `base_j = alpha*q_j + (1-alpha)*p_j` but displayed `p_j`.
+With `alpha = 1`, `q_j = 0.8` and `p_j = 0.25` it printed `0.25` where the
+correct value is `0.8`. The final weights were never wrong - they come from the
+backend - but the explanation misdescribed the calculation, which matters most
+in exactly the setting the page exists for. Every step now displays the quantity
+its own formula names, `p_j` is shown separately as a secondary line, and the
+special cases are explained rather than glossed:
+
+| Arm | What the explanation now says |
+|---|---|
+| `local-only` | one step: no aggregation at all, gamma = 1 |
+| `uniform-donor` | steps 1-3 inactive: neither a score nor sample size is used |
+| `fedavg` | alpha pinned to 0 and gamma = p_i **by definition**, and that the configured alpha and gamma do not apply |
+| any arm under the declared fallback | step 1 greyed out, step 2 shows `p_j`, with the reason the score was not used |
+
+**2. Replay used first-seed client information for every seed.**
+`report.write_run` writes `params/<client>.json` from `outs[0]`, and no per-seed
+client size was saved anywhere else (`compute.csv`'s `examples` is steps x batch
+size, not the training-fold size). The dashboard used those sizes whatever seed
+was selected.
+
+Rather than hide this behind a blanket warning, the backend now decides **per
+arm** whether it matters, because usually it does not:
+
+| Arm | Uses client sizes? | Consequence |
+|---|---|---|
+| score arm, `alpha = 1`, no fallback | no | weights come entirely from that seed's saved scores - **exact for any seed** |
+| `uniform-donor`, `local-only` | no | exact |
+| `fedavg`, any `alpha < 1`, any fallback | yes | **flagged**: exact only for the first seed |
+
+The aggregation inspector and the weight matrix show a warning when, and only
+when, the displayed weights actually depend on the sizes and a different seed is
+selected. The client panel states which seed its missingness summary belongs to.
+RMSE and the contrast tables are unaffected - metrics were saved per seed.
+
+**3. Some "transfers" were aggregation events.**
+The server computing a personalised model was animated as if the model had been
+sent, and every `/v1/parent` request was logged as "model sent" even when it
+failed. The four stages are now separate, and only the observed ones appear:
+
+| Stage | Observable from the server? | Shown as |
+|---|---|---|
+| server **computed** a model | yes | `computed` - a pulse on the coordinator, no packet |
+| client **requested** it | yes | part of `delivered` |
+| server **sent the response** | yes | `delivered` - a packet, only on HTTP 200 |
+| client **has** the model | **no** | never claimed; declared unavailable |
+
+Nothing in this protocol acknowledges a parent fetch, so receipt is not
+inferred. A failed request is a `reject` that says no model was sent. The demo
+clients exit once the final round closes, so the last round's models are
+computed and never requested - the run log now says so explicitly instead of
+leaving the picture to imply otherwise.
+
+**4. A live run reported no prediction error.**
+Clients now evaluate locally and report two aggregate numbers per model - the
+evaluated-record count and the summed squared error - from which the dashboard
+computes
+
+```
+RMSE = sqrt(summed squared error / evaluated-record count)
+```
+
+which is exactly what `model.metrics` reduces to. This is reported for the model
+the client **received** and for the model it **trained**, per client and as a
+micro-average over pooled records. No label and no per-example prediction is
+transmitted; `--evaluate-fold` chooses `val` (default) or `test`.
+
+Two honest notes travel with the table: at round 1 the "received" model is the
+untrained starting model, so its error is expected to be large; and a single
+live run is a demonstration that the system works, never evidence about which
+method is better.
 
 ---
 

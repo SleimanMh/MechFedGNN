@@ -229,7 +229,9 @@ def test_transfer_events_are_emitted_only_by_a_real_request(monkeypatch):
     assert bus.since(0) == []                                   # polling is not a transfer
     obs.handle("/v1/update", b"", "c0")
     obs.handle("/v1/parent", b"", "c0")
-    assert [e["kind"] for e in bus.since(0)] == ["transfer", "transfer"]
+    # an accepted update is an inbound transfer; a served parent request is a
+    # DELIVERY, which is a different observation and is labelled as one
+    assert [e["kind"] for e in bus.since(0)] == ["transfer", "delivered"]
 
 
 def test_the_stubbing_above_did_not_leak_into_the_real_server_app():
@@ -259,9 +261,13 @@ def test_a_real_launched_run_completes_over_mutual_tls_with_separate_processes()
     events = bus.since(0)
     assert any("mutual TLS" in e["text"] for e in events)
     assert [e["seq"] for e in events] == sorted(e["seq"] for e in events)
-    transfers = [e for e in events if e["kind"] == "transfer"]
-    assert {e["client"] for e in transfers} == {"c0", "c1"}
-    assert {e["direction"] for e in transfers} == {"in", "out"}
+    moved = [e for e in events if e["kind"] in ("transfer", "delivered")]
+    assert {e["client"] for e in moved} == {"c0", "c1"}
+    assert {e["direction"] for e in moved} == {"in", "out"}
+    # updates arrive, parent models are served; computing a model is neither
+    assert {e["kind"] for e in events if e.get("direction") == "in"} == {"transfer"}
+    assert {e["kind"] for e in events if e.get("direction") == "out"} == {"delivered"}
+    assert all("direction" not in e for e in events if e["kind"] == "computed")
 
     # weights came from the real aggregation, and the receiver never donates to itself
     for rec in s.records[0]:

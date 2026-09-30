@@ -1,7 +1,8 @@
 # Validation report
 
-**COUNT_PLACEHOLDER** (86 pre-existing research tests + 73 from the refactor +
-8 regression tests for the defects found in review + 44 from the dashboard).
+**232 tests pass, 1 skipped** (86 pre-existing research tests + 73 from the refactor +
+8 regression tests for the framework defects found in review + 44 from the
+dashboard + 22 regression tests for the dashboard defects found in review).
 Run: `python -m pytest tests -q` - or `-m "not slow"` to skip the three tests
 that spawn real client processes.
 
@@ -101,6 +102,18 @@ before any change, and fixed with a regression test each.
 | Nothing is emitted when nothing happens | `::test_an_idle_session_emits_nothing_at_all` | an idle federation stays idle |
 | A poll is not a transfer | `::test_transfer_events_are_emitted_only_by_a_real_request` | only `/v1/update` and `/v1/parent` emit |
 | A real launched run works | `::test_a_real_launched_run_completes_over_mutual_tls_with_separate_processes` (slow) | 2 client processes, mutual TLS, exit 0, weights from the real aggregation |
+
+## Dashboard defects found in review and fixed
+
+Reproduced first, then fixed, then covered by `tests/test_dashboard_review_fixes.py`
+(22 tests). Detail in `docs/DASHBOARD.md` §8b.
+
+| Defect | Fix | Test |
+|---|---|---|
+| The aggregation explanation displayed `p_j` under the label for `base_j` (with alpha = 1, q = 0.8, p = 0.25 it printed 0.25 where 0.8 is correct). Final weights were unaffected - they come from the backend - but the explanation misdescribed the method | every step displays the quantity its own formula names, with `p_j` shown separately; FedAvg's pinned alpha and gamma = p_i, uniform-donor's unused steps, the fallback's ignored score and local-only's absent aggregation are each explained | `test_the_blend_step_shows_base_j_not_the_sample_share`, `test_the_blend_step_matches_the_kernels_formula_for_every_alpha`, `test_fedavg_is_explained_with_its_own_pinned_alpha_and_self_weight`, `test_uniform_donor_is_explained_as_using_neither_score_nor_size`, `test_a_fallback_is_explained_as_ignoring_the_score`, `test_local_only_is_explained_as_no_aggregation_at_all` |
+| Replay used first-seed client sizes for every selected seed, silently (`report.write_run` writes params from `outs[0]`, and no per-seed size was saved anywhere) | decided **per arm**: a score arm with alpha = 1 and no fallback is exact for any seed; `fedavg`, any alpha < 1 and any fallback are flagged with the seed their sizes came from | `test_client_sizes_are_declared_as_first_seed_only`, `test_size_dependent_arms_are_flagged_on_a_non_first_seed`, `test_score_only_arms_are_exact_on_any_seed`, `test_size_dependence_is_decided_per_arm_not_guessed`, `test_the_weight_matrix_carries_the_same_caveat` |
+| A model being COMPUTED was animated as if delivered, and a failed `/v1/parent` request was logged as "model sent" | four separate stages: `computed` (pulse, no packet), `delivered` (only on HTTP 200), `reject`, and receipt - which nothing in the protocol acknowledges - never claimed | `test_a_failed_parent_request_is_not_reported_as_a_model_sent`, `test_a_successful_parent_request_is_a_delivery_and_claims_no_receipt`, `test_computing_a_model_is_not_a_transfer_event`, `test_the_frontend_animates_only_observed_transfers`, `test_unobserved_receipt_is_declared_unavailable` |
+| A live run reported no prediction error | clients evaluate on their own held-out fold and report evaluated-record count and summed squared error; RMSE = sqrt(sse / n), per client and micro-averaged. No labels or per-example predictions leave a client | `test_rmse_is_derived_from_counts_and_summed_squared_error_only`, `test_a_client_evaluation_contains_no_labels_or_predictions`, `test_an_empty_fold_does_not_produce_a_fake_zero`, `test_the_evaluate_fold_option_is_validated_like_every_other`, `test_a_real_live_run_reports_prediction_error_from_real_clients` (slow) |
 
 ## Bugs found and fixed during the refactor
 

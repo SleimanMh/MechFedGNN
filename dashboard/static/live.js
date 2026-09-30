@@ -32,6 +32,9 @@
             <label class="field"><span>Seed</span>
               <input type="number" id="lv-seed" value="7" min="0" max="9999"></label>
             <label class="field"><span>Method</span><select id="lv-arm"></select></label>
+            <label class="field"><span>Evaluate on</span>
+              <select id="lv-fold"><option value="val">val fold</option>
+                <option value="test">test fold</option></select></label>
             <button class="btn" id="lv-start">Start run</button>
             <button class="btn ghost" id="lv-stop">Stop</button>
           </div>
@@ -47,16 +50,27 @@
         <dl class="kv" id="lv-kv"></dl>
         <div id="lv-map-wrap"><svg id="lv-map" viewBox="0 0 900 420"></svg></div>
         <div class="legend">
-          <span><i class="sw back"></i> parent model sent to a client</span>
-          <span><i class="sw model"></i> model update received</span>
-          <span><i class="sw sig"></i> personalised model returned</span>
+          <span><i class="sw model"></i> model update received from a client</span>
+          <span><i class="sw back"></i> model sent in response to a client's request</span>
+          <span><i class="sw sig"></i> model computed by the server (no transfer)</span>
         </div>
+        <p class="note">Four stages, and only three are observable from the server:
+          the server <b>computes</b> a model, a client <b>requests</b> it, the server
+          <b>sends</b> the response. Receipt by the client is not acknowledged by this
+          protocol, so it is never shown. A model that is computed and never requested
+          shows a pulse on the coordinator and no packet.</p>
       </div>
 
       <div class="card">
         <h2>Realised weights (this run)</h2>
         <div class="table-wrap"><table id="lv-weights"></table></div>
         <p class="note" id="lv-weights-note"></p>
+      </div>
+
+      <div class="card">
+        <h2>Prediction error, reported by the clients</h2>
+        <div class="table-wrap"><table id="lv-rmse"></table></div>
+        <p class="note" id="lv-rmse-note"></p>
       </div>
 
       <div class="card">
@@ -94,7 +108,7 @@
     const cfg = {
       clients: Number($l("lv-clients").value), rounds: Number($l("lv-rounds").value),
       local_steps: Number($l("lv-steps").value), seed: Number($l("lv-seed").value),
-      arm: $l("lv-arm").value,
+      arm: $l("lv-arm").value, evaluate_fold: $l("lv-fold").value,
     };
     try {
       L.since = 0; L.seen = [];
@@ -146,11 +160,16 @@
     }
     renderKV(s);
     renderWeights(s);
+    renderRmse(s);
 
     (s.events || []).forEach((e) => {
       L.since = Math.max(L.since, e.seq);
       appendEvent(e);
-      if (e.kind === "transfer" || e.kind === "aggregate") animate(e);
+      // Animate a packet ONLY for an observed transfer: an accepted update
+      // arriving, or a parent model actually sent in response to a request.
+      // A `computed` event is not a transfer - it pulses the server instead.
+      if (e.kind === "transfer" || e.kind === "delivered") animate(e);
+      else if (e.kind === "computed") pulseServer();
     });
   }
 
@@ -199,6 +218,17 @@
     $l("lv-map").innerHTML = p.join("");
   }
 
+  function pulseServer() {
+    const svg = $l("lv-map");
+    const disc = svg.querySelector(".server .disc");
+    if (!disc || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    disc.style.transition = "none";
+    disc.style.stroke = "var(--teal-2)";
+    disc.style.strokeWidth = "7";
+    setTimeout(() => { disc.style.transition = "stroke-width .5s, stroke .5s";
+      disc.style.stroke = ""; disc.style.strokeWidth = ""; }, 60);
+  }
+
   function animate(e) {
     const svg = $l("lv-map");
     const edge = svg.querySelector(`.edge[data-client="${e.client}"]`);
@@ -210,7 +240,7 @@
     const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     dot.setAttribute("r", "6");
     dot.setAttribute("class", "packet " +
-      (e.kind === "aggregate" ? "sig" : e.direction === "out" ? "back" : ""));
+      (e.direction === "out" ? "back" : ""));
     layer.appendChild(dot);
     const inbound = e.direction === "in";
     const t0 = performance.now(), dur = 620;
@@ -232,6 +262,37 @@
     d.innerHTML = `<span class="seq">${ts}</span><span class="k">${e.kind}</span> ${e.text}${caveat}`;
     box.appendChild(d);
     box.scrollTop = box.scrollHeight;
+  }
+
+  function renderRmse(s) {
+    const t = $l("lv-rmse");
+    const rows = s.rmse || [];
+    if (!rows.length) {
+      t.innerHTML = "";
+      $l("lv-rmse-note").textContent =
+        "No client has reported yet. Error appears once a round closes: each client evaluates " +
+        "on its own held-out fold and sends only the record count and the summed squared error.";
+      return;
+    }
+    t.innerHTML = `<thead><tr><th>Round</th><th>Client</th><th>Fold</th>
+      <th>Records</th><th>Summed sq. error<br>(received)</th><th>RMSE received</th>
+      <th>Summed sq. error<br>(after local training)</th><th>RMSE local</th></tr></thead>`;
+    const tb = mk("tbody");
+    rows.forEach((r) => {
+      const tr = mk("tr");
+      if (String(r.client).startsWith("ALL")) tr.className = "diag";
+      tr.appendChild(mk("td", null, String(r.round)));
+      tr.appendChild(mk("td", null, r.client));
+      tr.appendChild(mk("td", null, r.fold));
+      tr.appendChild(mk("td", null, String(r.local_n)));
+      tr.appendChild(mk("td", null, f4(r.received_sse)));
+      tr.appendChild(mk("td", null, f4(r.received_rmse)));
+      tr.appendChild(mk("td", null, f4(r.local_sse)));
+      tr.appendChild(mk("td", null, f4(r.local_rmse)));
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    $l("lv-rmse-note").textContent = s.rmse_note || "";
   }
 
   function renderWeights(s) {

@@ -121,6 +121,11 @@ class Api:
                 "histogram_keys": sorted((p.get("hist") or {}).keys()),
                 "shared_counts": {"J_available": "J" in p, "H_available": "H" in p,
                                   "C_available": "C" in p},
+                "from_seed": r.get("params_seed"),
+                "seed_caveat": (f"these summaries were saved for seed {r.get('params_seed')} "
+                                f"only - report.write_run writes the client params from the "
+                                f"first seed. The clients are rebuilt for every seed, so another "
+                                f"seed's masks and sizes may differ"),
                 "privacy": "these are aggregate mask summaries and coarse histograms - "
                            "the rows, labels and per-row masks never leave the client"}
 
