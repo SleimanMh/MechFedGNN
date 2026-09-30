@@ -61,6 +61,9 @@ def main():
     ap.add_argument("--local-steps", type=int, default=25)
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--tls", default=None, help="certificate directory for mutual TLS")
+    ap.add_argument("--send-signature", action="store_true",
+                    help="also send the AGGREGATE mask summary, which score-based "
+                         "weighting needs on the server (still never rows or labels)")
     args = ap.parse_args()
 
     meta = json.load(open(os.path.join(args.shards, "meta.json"), encoding="utf-8"))
@@ -82,7 +85,7 @@ def main():
         if not wait_open(transport, args.client_id, r, args.timeout):
             print(f"{args.client_id}: round {r} never opened", flush=True)
             raise SystemExit(2)
-        status, resp = rt.run_round(r, meta["schema_id"])
+        status, resp = rt.run_round(r, meta["schema_id"], send_signature=args.send_signature)
         print(f"{args.client_id}: round {r} submitted -> {status} {resp}", flush=True)
         if status != 200:
             raise SystemExit(3)

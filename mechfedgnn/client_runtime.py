@@ -58,6 +58,19 @@ class ClientRuntime:
     def n_train(self) -> int:
         return int(len(self._data["train"]))
 
+    @staticmethod
+    def _json_safe(x):
+        """Aggregate statistics as plain JSON. Shapes are per-FEATURE, never per-row."""
+        if isinstance(x, np.ndarray):
+            return x.tolist()
+        if isinstance(x, dict):
+            return {k: ClientRuntime._json_safe(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [ClientRuntime._json_safe(v) for v in x]
+        if isinstance(x, (np.floating, np.integer)):
+            return x.item()
+        return x
+
     def aggregate_signature(self) -> dict:
         """Aggregate mask statistics only - never per-row masks."""
         d = self._data
@@ -87,15 +100,23 @@ class ClientRuntime:
                                   seed=self.seed + round_id)
 
     def submit(self, round_id: int, state: Mapping[str, np.ndarray], parent_version: str,
-               schema: str) -> tuple[int, Any]:
+               schema: str, send_signature: bool = False) -> tuple[int, Any]:
+        """`send_signature` attaches the AGGREGATE mask summary, which is what a
+        score-based method needs on the server. It is opt-in because a method
+        that does not use scores must not transmit more than it needs; what it
+        attaches is exactly `MaskSignatureProvider.aggregate_only`, so per-row
+        masks, features and labels still cannot leave."""
+        meta = {"n_train": self.n_train}
+        if send_signature:
+            meta["signature"] = self._json_safe(self.aggregate_signature())
         env = Envelope(experiment_id=self.experiment_id, client_id=self.client_id,
                        round_id=round_id, payload_type="model_update",
                        parent_version=parent_version, schema_id=schema,
                        update_id=update_id(self.client_id, round_id, state),
-                       meta={"n_train": self.n_train})
+                       meta=meta)
         return self.transport.call("/v1/update", env, state)
 
-    def run_round(self, round_id: int, schema: str) -> tuple[int, Any]:
+    def run_round(self, round_id: int, schema: str, send_signature: bool = False) -> tuple[int, Any]:
         parent, version = self.fetch_parent(round_id)
         new_state = self.local_update(parent, round_id)
-        return self.submit(round_id, new_state, version, schema)
+        return self.submit(round_id, new_state, version, schema, send_signature)

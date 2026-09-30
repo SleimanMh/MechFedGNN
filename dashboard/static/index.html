@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MechFedGNN — Experiment Dashboard</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark"></span>
+    <div>
+      <h1>MechFedGNN</h1>
+      <p>Personalised federated learning for differently-incomplete clients</p>
+    </div>
+  </div>
+  <div class="topbar-controls">
+    <label class="field">
+      <span>Experiment run</span>
+      <select id="run-select"></select>
+    </label>
+    <button id="guide-btn" class="btn ghost" title="Step through the demonstration">Guided tour</button>
+    <button id="theme-btn" class="btn ghost" title="Toggle dark mode">Dark</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-view="overview" class="active">Federation</button>
+  <button data-view="aggregation">Server aggregation</button>
+  <button data-view="weights">Weights</button>
+  <button data-view="results">Results</button>
+  <button data-view="timeline">Timeline &amp; log</button>
+  <button data-view="live">Live / launch</button>
+</nav>
+
+<main>
+
+  <!-- ================= FEDERATION ================= -->
+  <section id="view-overview" class="view active">
+    <div class="grid-2">
+      <div class="card">
+        <h2>This round</h2>
+        <dl class="kv" id="round-kv"></dl>
+        <p class="note" id="round-note"></p>
+      </div>
+      <div class="card">
+        <h2>Method in force</h2>
+        <dl class="kv" id="method-kv"></dl>
+        <p class="note">Every client keeps <b>&gamma;</b> of its own model. Donors supply the
+          remaining 1&minus;&gamma;, split by the arm's weights.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Federation map</h2>
+        <div class="inline-controls">
+          <label class="field inline"><span>Seed</span><select id="ov-seed"></select></label>
+          <label class="field inline"><span>Method</span><select id="ov-arm"></select></label>
+          <button id="replay-btn" class="btn">Replay this round</button>
+        </div>
+      </div>
+      <div id="map-wrap"><svg id="map" viewBox="0 0 900 460" role="img"
+        aria-label="Clients arranged around the coordinating server"></svg></div>
+      <p class="note" id="map-note">Click a client to inspect it. Line thickness is that client's
+        effective contribution to the selected receiver. Transfers animate only while a replay is
+        running.</p>
+      <div class="legend">
+        <span><i class="sw sig"></i> signature upload (aggregate only)</span>
+        <span><i class="sw model"></i> model parameters</span>
+        <span><i class="sw back"></i> personalised model returned</span>
+      </div>
+    </div>
+
+    <div class="card" id="client-card" hidden>
+      <div class="card-head">
+        <h2 id="client-title">Client</h2>
+        <button class="btn ghost" id="client-close">Close</button>
+      </div>
+      <div id="client-body"></div>
+    </div>
+  </section>
+
+  <!-- ================= AGGREGATION ================= -->
+  <section id="view-aggregation" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>How the server computes this receiver's model</h2>
+        <div class="inline-controls">
+          <label class="field inline"><span>Seed</span><select id="ag-seed"></select></label>
+          <label class="field inline"><span>Receiver</span><select id="ag-receiver"></select></label>
+          <label class="field inline"><span>Method</span><select id="ag-arm"></select></label>
+        </div>
+      </div>
+      <p class="note" id="ag-source"></p>
+      <div id="ag-fallback"></div>
+      <ol class="steps" id="ag-steps"></ol>
+      <h3>Donors</h3>
+      <div class="table-wrap"><table id="ag-table"></table></div>
+      <div id="ag-balance" class="balance"></div>
+    </div>
+    <div class="card">
+      <h2>Terms used on this page</h2>
+      <dl class="glossary" id="glossary"></dl>
+    </div>
+  </section>
+
+  <!-- ================= WEIGHTS ================= -->
+  <section id="view-weights" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>Who contributes to whom</h2>
+        <div class="inline-controls">
+          <label class="field inline"><span>Seed</span><select id="w-seed"></select></label>
+          <label class="field inline"><span>Method</span><select id="w-arm"></select></label>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="w-matrix"></table></div>
+      <p class="note" id="w-matrix-note"></p>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>Weights across seeds</h2>
+        <label class="field inline"><span>Receiver</span><select id="w-receiver"></select></label>
+      </div>
+      <div id="w-history"></div>
+      <p class="note" id="w-history-note"></p>
+    </div>
+  </section>
+
+  <!-- ================= RESULTS ================= -->
+  <section id="view-results" class="view">
+    <div class="card">
+      <div class="card-head">
+        <h2>Prediction results</h2>
+        <div class="inline-controls">
+          <label class="field inline"><span>Fold</span><select id="r-fold"></select></label>
+          <label class="field inline"><span>Timepoint</span><select id="r-tp"></select></label>
+          <label class="field inline"><span>Compared with</span><select id="r-ref"></select></label>
+        </div>
+      </div>
+      <div class="callout" id="r-caution"></div>
+      <h3>Per-receiver RMSE <span class="sub" id="r-sub"></span></h3>
+      <div class="table-wrap"><table id="r-table"></table></div>
+      <h3>Contrast against the reference arm</h3>
+      <div class="table-wrap"><table id="r-contrast"></table></div>
+      <p class="note" id="r-note"></p>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>How was this result computed?</h2>
+        <div class="inline-controls">
+          <label class="field inline"><span>Receiver</span><select id="e-receiver"></select></label>
+          <label class="field inline"><span>Method</span><select id="e-arm"></select></label>
+        </div>
+      </div>
+      <div id="explain-body"></div>
+    </div>
+  </section>
+
+  <!-- ================= TIMELINE ================= -->
+  <section id="view-timeline" class="view">
+    <div class="card">
+      <h2>Protocol order</h2>
+      <div class="callout warn" id="tl-warning"></div>
+      <ol class="timeline" id="tl-stages"></ol>
+    </div>
+    <div class="card">
+      <h2>Event log</h2>
+      <div class="inline-controls">
+        <button class="btn" id="log-replay">Replay</button>
+        <button class="btn ghost" id="log-clear">Clear</button>
+        <span class="note" id="log-source"></span>
+      </div>
+      <div class="log" id="event-log"></div>
+    </div>
+  </section>
+
+  <!-- ================= LIVE ================= -->
+  <section id="view-live" class="view">
+    <div id="live-root"></div>
+  </section>
+
+</main>
+
+<div id="guide" class="guide" hidden>
+  <div class="guide-inner">
+    <span class="guide-step" id="guide-step"></span>
+    <p id="guide-text"></p>
+    <div class="guide-actions">
+      <button class="btn ghost" id="guide-prev">Back</button>
+      <button class="btn" id="guide-next">Next</button>
+      <button class="btn ghost" id="guide-exit">Exit</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+<script src="live.js"></script>
+</body>
+</html>

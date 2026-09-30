@@ -29,7 +29,7 @@ Recovery policy (documented, and enforced by tests):
 """
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 import numpy as np
@@ -60,13 +60,15 @@ class Checkpoint:
     seed_streams: dict
     models: dict                      # client -> parent (open) or aggregated (complete) state
     updates: dict                     # client -> update already received this round
+    signatures: dict = field(default_factory=dict)   # client -> aggregate summary, if sent
 
     def header(self) -> dict:
         return {"schema_version": CHECKPOINT_SCHEMA, "experiment_id": self.experiment_id,
                 "round_id": self.round_id, "round_status": self.round_status,
                 "clients": list(self.clients), "assigned": dict(self.assigned),
                 "accepted_update_ids": sorted(self.accepted_update_ids),
-                "counts": dict(self.counts), "model_schema_id": self.model_schema_id,
+                "counts": dict(self.counts), "signatures": dict(self.signatures),
+                "model_schema_id": self.model_schema_id,
                 "config_digest": self.config_digest, "seed_streams": dict(self.seed_streams),
                 "optimizer": OPTIMIZER_POLICY,
                 "model_versions": {c: state_version(s) for c, s in self.models.items()},
@@ -124,7 +126,8 @@ def load(directory: str) -> Checkpoint | None:
     return Checkpoint(experiment_id=h["experiment_id"], round_id=h["round_id"],
                       round_status=h["round_status"], clients=h["clients"],
                       assigned=h["assigned"], accepted_update_ids=h["accepted_update_ids"],
-                      counts=h["counts"], model_schema_id=h["model_schema_id"],
+                      counts=h["counts"], signatures=h.get("signatures") or {},
+                      model_schema_id=h["model_schema_id"],
                       config_digest=h["config_digest"], seed_streams=h["seed_streams"],
                       models=models, updates=updates)
 
@@ -135,6 +138,7 @@ def from_coordinator(coord, config_digest: str, seed_streams: Mapping[str, Any])
                       round_status="complete" if r.closed else "open",
                       clients=list(coord.clients), assigned=dict(r.assigned),
                       accepted_update_ids=sorted(r.accepted_ids), counts=dict(r.counts),
+                      signatures=dict(r.signatures),
                       model_schema_id=coord.schema, config_digest=config_digest,
                       seed_streams=dict(seed_streams), models=dict(coord.models),
                       updates={} if r.closed else dict(r.updates))
@@ -155,5 +159,6 @@ def restore(coord, cp: Checkpoint) -> tuple[int, str]:
     coord.round.assigned = dict(cp.assigned)          # keep the ORIGINAL assignment
     coord.round.accepted_ids = set(cp.accepted_update_ids)
     coord.round.counts = dict(cp.counts)
+    coord.round.signatures = dict(cp.signatures)
     coord.round.updates = dict(cp.updates)            # payloads, not just their ids
     return cp.round_id, "open"

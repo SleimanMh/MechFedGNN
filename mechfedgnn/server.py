@@ -59,6 +59,7 @@ class RoundState:
     assigned: dict[str, str] = field(default_factory=dict)     # client -> parent version
     updates: dict[str, dict] = field(default_factory=dict)     # client -> state
     counts: dict[str, int] = field(default_factory=dict)       # client -> declared n
+    signatures: dict[str, dict] = field(default_factory=dict)  # client -> AGGREGATE summary
     accepted_ids: set[str] = field(default_factory=set)
     closed: bool = False
     opened_at: float = field(default_factory=time.monotonic)
@@ -128,6 +129,11 @@ class ServerCoordinator:
         r.accepted_ids.add(env.update_id)
         r.updates[env.client_id] = dict(state)
         r.counts[env.client_id] = n
+        sig = env.meta.get("signature")
+        if isinstance(sig, dict):
+            # aggregate mask statistics only; a score-based method needs them on
+            # the server. Anything else in meta is ignored.
+            r.signatures[env.client_id] = sig
         return env.update_id
 
     def missing(self) -> list[str]:
