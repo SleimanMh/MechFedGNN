@@ -141,18 +141,28 @@ def _make_handler(app: ServerApp, identity_from_cert: bool):
             except ValueError:
                 length = -1
             if length < 0 or length > app.max_bytes:
-                return self._respond(413, ServerApp._err("payload too large"))
+                # the body is oversized or unparseable, so it is NOT drained;
+                # close instead, or the leftover bytes corrupt the next request
+                return self._respond(413, ServerApp._err("payload too large"), close=True)
             ident = self._identity()
             if not ident:
+                # drain before refusing: on a keep-alive connection an unread body
+                # is parsed as the next request, and the client can be reset
+                # before it manages to read this response
+                if length:
+                    self.rfile.read(length)
                 return self._respond(401, ServerApp._err("unauthenticated"))
             blob = self.rfile.read(length) if length else b""
             status, body = app.handle(self.path, blob, ident)
             self._respond(status, body)
 
-        def _respond(self, status: int, body: bytes):
+        def _respond(self, status: int, body: bytes, close: bool = False):
             self.send_response(status)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
+            if close:
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
             self.wfile.write(body)
 

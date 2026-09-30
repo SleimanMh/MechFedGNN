@@ -213,28 +213,29 @@ def test_an_idle_session_emits_nothing_at_all():
     assert s.status()["state"] == "idle" and s.status()["records"] == []
 
 
-def test_transfer_events_are_emitted_only_by_a_real_request():
-    """ObservedApp emits on handle(); a status poll is not a transfer."""
+def test_transfer_events_are_emitted_only_by_a_real_request(monkeypatch):
+    """ObservedApp emits on handle(); a status poll is not a transfer.
+
+    The base handler is stubbed via monkeypatch so pytest restores it: patching
+    ServerApp.handle permanently would break every other network test.
+    """
     bus = live.EventBus()
-
-    class FakeApp:
-        def handle(self, route, blob, ident):
-            return 200, b'{"ok": true}'
-
+    monkeypatch.setattr(live.ServerApp, "handle",
+                        lambda self, route, blob, ident: (200, b'{"ok": true}'))
     obs = live.ObservedApp.__new__(live.ObservedApp)
     obs.bus = bus
-    obs_handle = live.ObservedApp.handle.__get__(obs)
-    live.ServerApp.handle = FakeApp.handle                      # patched for this test only
-    try:
-        obs_handle("/v1/status", b"", "c0")
-        assert bus.since(0) == []                               # polling is not a transfer
-        obs_handle("/v1/update", b"", "c0")
-        obs_handle("/v1/parent", b"", "c0")
-    finally:
-        import importlib
-        importlib.reload(live)
-    kinds = [e["kind"] for e in bus.since(0)]
-    assert kinds == ["transfer", "transfer"]
+
+    obs.handle("/v1/status", b"", "c0")
+    assert bus.since(0) == []                                   # polling is not a transfer
+    obs.handle("/v1/update", b"", "c0")
+    obs.handle("/v1/parent", b"", "c0")
+    assert [e["kind"] for e in bus.since(0)] == ["transfer", "transfer"]
+
+
+def test_the_stubbing_above_did_not_leak_into_the_real_server_app():
+    """Guard: the previous test must leave ServerApp.handle untouched."""
+    from mechfedgnn.transport import ServerApp as RealApp
+    assert RealApp.handle.__qualname__ == "ServerApp.handle"
 
 
 @pytest.mark.slow

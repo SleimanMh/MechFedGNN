@@ -1,8 +1,11 @@
 # Validation report
 
-**159 tests pass** (86 pre-existing research tests + 73 added by the refactor).
-Run: `python -m pytest tests -q` — or `-m "not slow"` to skip the one test that
-spawns real processes.
+**202 tests pass, 1 skipped** (86 pre-existing research tests + 73 from the
+refactor + 44 from the dashboard). Run: `python -m pytest tests -q` — or
+`-m "not slow"` to skip the three tests that spawn real client processes.
+
+The skip is conditional: one dashboard test skips itself when no declared
+fallback happens to fire in the reference run, rather than asserting nothing.
 
 Passing these tests does **not** mean production readiness. See
 `docs/SECURITY.md` §3 for what is explicitly not protected.
@@ -69,6 +72,25 @@ injection **disabled**; provenance records the dirty flag, checksums, split and
 mask ids, preprocessing and where it was fitted, realised weights, fallbacks and
 participation.
 
+## Dashboard (docs/DASHBOARD.md)
+
+| Requirement | Test | Result |
+|---|---|---|
+| Replayed weights equal the ORIGINAL implementation's | `test_dashboard_replay.py::test_recomputed_weights_match_the_golden_reference` | every arm, receiver and donor, plus gamma and fallback reason |
+| The only difference is the artifact's precision | `::test_the_only_difference_is_the_artifacts_10_significant_digits` | fed full-precision scores, the reader reproduces the realised weights **exactly** |
+| Contributions form a proper weighted average | `::test_contributions_sum_to_one_and_the_receiver_never_donates_to_itself`, `::test_weight_matrix_rows_sum_to_one_and_the_diagonal_is_gamma` | gamma + sum(donors) = 1 for every arm and receiver |
+| FedAvg keeps its own self-weight | `::test_fedavg_self_weight_is_its_own_sample_share_not_the_configured_gamma` | gamma = p_i, not the configured gamma |
+| Missing information is declared, not approximated | `::test_unavailable_information_is_declared_rather_than_approximated`, `test_dashboard_app.py::test_unavailable_information_is_declared_by_the_api` | event log, error sums, loss curves, val/test counts and multi-round history all reported unavailable |
+| Only whitelisted run directories open | `test_dashboard_app.py::test_only_whitelisted_run_directories_can_be_opened` | 7 traversal attempts refused |
+| Static serving cannot escape its directory | `::test_static_serving_cannot_escape_its_directory` | 403/404 |
+| No command, path or shell in the API | `::test_no_endpoint_accepts_a_command_or_an_arbitrary_path`, `::test_the_launcher_never_uses_a_shell_and_names_its_program_itself` | no `shell=True`, no `os.system`, no `eval`; the program is always `sys.executable` |
+| Localhost by default | `::test_serving_defaults_to_localhost` | |
+| No raw records, labels, masks or per-example predictions | `::test_no_raw_records_labels_or_per_row_masks_are_ever_returned` | sweeps **every** read endpoint and rejects any row-length array |
+| Launch refused unless enabled; config validated | `::test_launching_is_refused_when_it_was_not_enabled`, `::test_the_launch_configuration_is_validated_not_clamped_silently`, `::test_unknown_launch_keys_are_dropped_rather_than_passed_through` | 403; 8 rejected configurations; unknown keys dropped |
+| Nothing is emitted when nothing happens | `::test_an_idle_session_emits_nothing_at_all` | an idle federation stays idle |
+| A poll is not a transfer | `::test_transfer_events_are_emitted_only_by_a_real_request` | only `/v1/update` and `/v1/parent` emit |
+| A real launched run works | `::test_a_real_launched_run_completes_over_mutual_tls_with_separate_processes` (slow) | 2 client processes, mutual TLS, exit 0, weights from the real aggregation |
+
 ## Bugs found and fixed during the refactor
 
 1. **Golden fixture rounding** — capture rounded to 12 decimals while the test
@@ -79,7 +101,15 @@ participation.
    Fixed by treating "the round has advanced past *r*" as completion.
 3. **Server exited before clients could confirm** the final round. Fixed with a
    linger period.
-4. **Open-round checkpoints saved update ids but not payloads** — every resend
+4. **A 401 was sent without draining the request body** (found while verifying
+   the dashboard). On a keep-alive connection the unread body is parsed as the
+   next request, so the client could be reset before reading the refusal - an
+   order-dependent failure of
+   `test_unauthenticated_network_request_is_refused` on Windows, roughly half
+   the time when the security tests ran first. The handler now drains before
+   refusing, and closes the connection on an oversized body instead of leaving
+   it unread. Five consecutive runs of the failing combination now pass.
+5. **Open-round checkpoints saved update ids but not payloads** — every resend
    would be rejected as a duplicate while the payload was gone, so a resumed
    round could never complete. Fixed by checkpointing the received updates too.
 
