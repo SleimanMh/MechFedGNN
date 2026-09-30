@@ -127,14 +127,20 @@ def test_resumed_completed_round_does_not_reapply_its_updates(tmp_path):
     assert {c: state_version(revived.models[c]) for c in CLIENTS} == versions
 
 
+def _committed(tmp_path, prefix, client):
+    """The state file the current header actually points at."""
+    gen = json.loads((tmp_path / "checkpoint.json").read_text(encoding="utf-8"))["generation"]
+    return tmp_path / f"{prefix}_{client}_g{gen}.npz"
+
+
 def test_tampered_or_missing_model_file_is_detected(tmp_path):
     coord = fresh_coord()
     save(str(tmp_path), from_coordinator(coord, "cfg", STREAMS))
-    np.savez(tmp_path / "model_c1.npz", w=np.zeros(4), b=np.zeros(1))   # tampered
+    np.savez(_committed(tmp_path, "model", "c1"), w=np.zeros(4), b=np.zeros(1))   # tampered
     with pytest.raises(ValueError, match="does not match the checkpoint"):
         load(str(tmp_path))
 
-    os.remove(tmp_path / "model_c0.npz")
+    os.remove(_committed(tmp_path, "model", "c0"))
     with pytest.raises((FileNotFoundError, ValueError)):
         load(str(tmp_path))
 
@@ -159,3 +165,50 @@ def test_checkpoint_write_is_atomic_and_leaves_no_partial_files(tmp_path):
     # the header is the commit point: without it a resume finds nothing
     os.remove(tmp_path / "checkpoint.json")
     assert load(str(tmp_path)) is None
+
+
+def test_an_interrupted_replacement_leaves_the_previous_checkpoint_loadable(tmp_path, monkeypatch):
+    """Regression: writing state over the committed file names destroyed BOTH.
+
+    Per-file atomic writes were not enough. The old header kept pointing at file
+    names whose contents had already been replaced, so an interruption before
+    the header was rewritten left a checkpoint that no longer loaded at all.
+    """
+    import mechfedgnn.checkpoint as C
+
+    first = fresh_coord()
+    save(str(tmp_path), from_coordinator(first, "cfg", STREAMS))
+    before = load(str(tmp_path))
+    assert before is not None and before.round_id == 1
+
+    second = ServerCoordinator(experiment_id=EXP, clients=CLIENTS, schema=schema_id(tiny_state()))
+    second.open_round(2, {c: tiny_state(5 + i) for i, c in enumerate(CLIENTS)})
+
+    def die(*a, **k):
+        raise KeyboardInterrupt("died before the header was committed")
+
+    monkeypatch.setattr(C, "atomic_write_json", die)
+    with pytest.raises(KeyboardInterrupt):
+        save(str(tmp_path), from_coordinator(second, "cfg", STREAMS))
+    monkeypatch.undo()
+
+    after = load(str(tmp_path))                       # the OLD checkpoint must survive intact
+    assert after is not None
+    assert after.round_id == before.round_id
+    for c in CLIENTS:
+        np.testing.assert_array_equal(after.models[c]["w"], before.models[c]["w"])
+
+
+def test_a_committed_replacement_removes_the_superseded_state_files(tmp_path):
+    coord = fresh_coord()
+    save(str(tmp_path), from_coordinator(coord, "cfg", STREAMS))
+    gen1 = json.loads((tmp_path / "checkpoint.json").read_text(encoding="utf-8"))["generation"]
+
+    coord.open_round(2, {c: tiny_state(3) for c in CLIENTS})
+    save(str(tmp_path), from_coordinator(coord, "cfg", STREAMS))
+    gen2 = json.loads((tmp_path / "checkpoint.json").read_text(encoding="utf-8"))["generation"]
+
+    assert gen2 == gen1 + 1
+    assert not list(tmp_path.glob(f"*_g{gen1}.npz"))          # superseded files removed
+    assert list(tmp_path.glob(f"model_*_g{gen2}.npz"))
+    assert load(str(tmp_path)).round_id == 2

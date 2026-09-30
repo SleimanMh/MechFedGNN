@@ -42,7 +42,10 @@ def main():
 
     coord = ServerCoordinator(experiment_id="demo", clients=meta["clients"],
                               schema=meta["schema_id"], round_timeout_s=args.timeout,
-                              on_timeout=args.on_timeout)
+                              on_timeout=args.on_timeout,
+                              # every client must standardise in the same coordinates,
+                              # or its parameters are not comparable with the others'
+                              require_preprocessing_id=meta.get("preprocessing_id"))
     app = ServerApp(coord)
 
     ctx = None
@@ -52,6 +55,7 @@ def main():
     httpd = serve(app, args.host, args.port, ssl_context=ctx)
     port = httpd.server_address[1]
     scheme = "https" if ctx else "http"
+    print(f"requiring preprocessing={meta.get('preprocessing_id')}", flush=True)
     print(f"server listening on {scheme}://{args.host}:{port} "
           f"({'mutual TLS' if ctx else 'DEV header identity - not a security control'})",
           flush=True)
